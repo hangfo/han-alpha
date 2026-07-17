@@ -11,7 +11,7 @@ from hanalpha.domain.models import Evidence
 
 
 @pytest.mark.asyncio
-async def test_llm_malformed_output_fails_closed(signal, regime) -> None:
+async def test_llm_malformed_output_fails_closed(signal, regime, now) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"output_text": "not-json"})
 
@@ -22,7 +22,7 @@ async def test_llm_malformed_output_fails_closed(signal, regime) -> None:
             model="test-model",
             client=client,
         )
-        result = await agent.assess(signal, [], regime)
+        result = await agent.assess(signal, [], regime, now)
     assert result.veto
     assert "malformed_llm_output" in result.invalidators
 
@@ -58,6 +58,6 @@ async def test_llm_fabricated_evidence_fails_closed(signal, regime, now) -> None
             model="test-model",
             client=client,
         )
-        result = await agent.assess(signal, [evidence], regime)
+        result = await agent.assess(signal, [evidence], regime, now)
     assert result.veto
     assert "fabricated_evidence_id" in result.invalidators

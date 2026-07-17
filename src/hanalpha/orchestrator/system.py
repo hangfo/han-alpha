@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from hanalpha.agents import (
@@ -15,8 +15,9 @@ from hanalpha.config import AppConfig, SecretSettings
 from hanalpha.data.base import MarketDataProvider
 from hanalpha.data.polygon import PolygonMarketDataProvider
 from hanalpha.data.synthetic import SyntheticMarketDataProvider
-from hanalpha.domain.enums import OrderStatus
-from hanalpha.domain.models import Evidence, OrderEvent, OrderRequest, Signal, utc_now
+from hanalpha.domain.clock import DecisionClock, SystemDecisionClock, ensure_aware_utc
+from hanalpha.domain.enums import OperatingMode, OrderStatus
+from hanalpha.domain.models import Evidence, OrderEvent, OrderRequest, Quote, Signal
 from hanalpha.execution.base import Broker
 from hanalpha.execution.ibkr import IBKRBroker
 from hanalpha.execution.simulated import SimulatedBroker
@@ -24,6 +25,7 @@ from hanalpha.features.technical import average_dollar_volume
 from hanalpha.portfolio.ledger import Ledger
 from hanalpha.regime.engine import RegimeEngine
 from hanalpha.risk.engine import KillSwitch, RiskEngine
+from hanalpha.runtime.capabilities import RuntimeAccess, build_runtime_access
 from hanalpha.strategies import BreakoutStrategy, EventContinuationStrategy, TrendPullbackStrategy
 
 
@@ -36,12 +38,16 @@ class TradingSystem:
         broker: Broker,
         ledger: Ledger,
         committee: AgentCommittee,
+        runtime_access: RuntimeAccess,
+        clock: DecisionClock,
     ) -> None:
         self.config = config
         self.provider = provider
         self.broker = broker
         self.ledger = ledger
         self.committee = committee
+        self.runtime_access = runtime_access
+        self.clock = clock
         self.kill_switch = KillSwitch()
         self.risk = RiskEngine(config.risk, self.kill_switch)
         self.regime_engine = RegimeEngine()
@@ -91,10 +97,8 @@ class TradingSystem:
             self.ledger.record_order_event(event)
         return events
 
-    async def run_cycle(self, now: datetime | None = None) -> dict[str, Any]:
-        cycle_now = now or utc_now()
-        if cycle_now.tzinfo is None:
-            cycle_now = cycle_now.replace(tzinfo=UTC)
+    async def run_cycle(self, as_of: datetime | None = None) -> dict[str, Any]:
+        cycle_now = ensure_aware_utc(as_of or self.clock.now())
         self.cycle_count += 1
         advance = getattr(self.provider, "advance", None)
         if callable(advance):
@@ -134,7 +138,9 @@ class TradingSystem:
                 if signal is None:
                     continue
                 self.ledger.record_signal(signal)
-                approved_by_agents, assessments = await self.committee.review(signal, evidence, regime)
+                approved_by_agents, assessments = await self.committee.review(
+                    signal, evidence, regime, cycle_now
+                )
                 signal_row = {
                     **signal.model_dump(mode="json"),
                     "agent_approved": approved_by_agents,
@@ -143,7 +149,7 @@ class TradingSystem:
                 signals.append(signal_row)
                 if not approved_by_agents:
                     continue
-                idempotency_key = f"{self.config.environment}:{signal.signal_id}"
+                idempotency_key = f"{self.config.operating_mode.value}:{signal.signal_id}"
                 plan = self.risk.create_plan(
                     signal=signal,
                     account=account,
@@ -185,12 +191,11 @@ class TradingSystem:
                         status=OrderStatus.RISK_APPROVED,
                     )
                     self.ledger.record_order(order)
-                    should_auto_submit = (
-                        self.config.environment == "paper"
-                        and self.config.execution.auto_submit_paper
-                    )
+                    should_auto_submit = self.runtime_access.capabilities.automatic_submission
                     if should_auto_submit:
-                        events = await self.broker.submit(order, quote)
+                        events = await self.broker.submit(
+                            order, quote, self.runtime_access.broker_write
+                        )
                         account = await self.broker.get_account_snapshot()
                     else:
                         self.pending_orders[order.order_id] = (order, quote)
@@ -221,8 +226,13 @@ class TradingSystem:
 
     async def status(self) -> dict[str, Any]:
         return {
-            "environment": self.config.environment,
+            "operating_mode": self.config.operating_mode.value,
             "mode": self.config.mode,
+            "capabilities": {
+                "broker_write": self.runtime_access.capabilities.broker_write,
+                "automatic_submission": self.runtime_access.capabilities.automatic_submission,
+                "operator_api": self.runtime_access.capabilities.operator_api,
+            },
             "cycle_count": self.cycle_count,
             "broker_connected": await self.broker.is_connected(),
             "market_data_healthy": await self.provider.is_healthy(),
@@ -232,8 +242,21 @@ class TradingSystem:
             "account": (await self.broker.get_account_snapshot()).model_dump(mode="json"),
         }
 
+    async def cancel_all(self) -> list[OrderEvent]:
+        events = await self.broker.cancel_all(self.runtime_access.broker_write)
+        for event in events:
+            self.ledger.record_order_event(event)
+        return events
+
+    async def flatten_all(self, quotes: dict[str, Quote]) -> list[OrderEvent]:
+        events = await self.broker.flatten_all(quotes, self.runtime_access.broker_write)
+        for event in events:
+            self.ledger.record_order_event(event)
+        return events
+
 
 async def build_system(config: AppConfig, secrets: SecretSettings, ledger: Ledger) -> TradingSystem:
+    runtime_access = build_runtime_access(config, secrets)
     if config.mode == "synthetic":
         provider: MarketDataProvider = SyntheticMarketDataProvider(config.bar_interval_minutes)
     else:
@@ -272,4 +295,6 @@ async def build_system(config: AppConfig, secrets: SecretSettings, ledger: Ledge
         broker=broker,
         ledger=ledger,
         committee=committee,
+        runtime_access=runtime_access,
+        clock=SystemDecisionClock(),
     )

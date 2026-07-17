@@ -10,7 +10,9 @@ from hanalpha.execution import SimulatedBroker
 
 
 @pytest.mark.asyncio
-async def test_protective_stop_closes_position(quote, risk_config) -> None:
+async def test_protective_stop_closes_position(
+    quote, risk_config, broker_write_capability
+) -> None:
     broker = SimulatedBroker(100_000, risk_config.execution)
     order = OrderRequest(
         order_id="entry-1",
@@ -23,7 +25,7 @@ async def test_protective_stop_closes_position(quote, risk_config) -> None:
         target_price=110,
         idempotency_key="entry-idem",
     )
-    await broker.submit(order, quote)
+    await broker.submit(order, quote, broker_write_capability)
     stop_quote = quote.model_copy(
         update={
             "timestamp": quote.timestamp + timedelta(seconds=1),
@@ -38,7 +40,9 @@ async def test_protective_stop_closes_position(quote, risk_config) -> None:
 
 
 @pytest.mark.asyncio
-async def test_flatten_without_quote_refuses_to_guess(quote, risk_config) -> None:
+async def test_flatten_without_quote_refuses_to_guess(
+    quote, risk_config, broker_write_capability
+) -> None:
     broker = SimulatedBroker(100_000, risk_config.execution)
     order = OrderRequest(
         order_id="entry-1",
@@ -51,7 +55,25 @@ async def test_flatten_without_quote_refuses_to_guess(quote, risk_config) -> Non
         target_price=110,
         idempotency_key="entry-idem",
     )
-    await broker.submit(order, quote)
-    events = await broker.flatten_all({})
+    await broker.submit(order, quote, broker_write_capability)
+    events = await broker.flatten_all({}, broker_write_capability)
     assert events[0].status == OrderStatus.ERROR
     assert events[0].message == "missing_fresh_quote"
+
+
+@pytest.mark.asyncio
+async def test_broker_write_without_capability_fails_closed(quote, risk_config) -> None:
+    broker = SimulatedBroker(100_000, risk_config.execution)
+    order = OrderRequest(
+        order_id="entry-1",
+        plan_id="plan-1",
+        symbol="NVDA",
+        side=Side.BUY,
+        quantity=10,
+        limit_price=quote.ask,
+        stop_price=98,
+        target_price=110,
+        idempotency_key="entry-idem",
+    )
+    with pytest.raises(PermissionError, match="broker_write_capability_required"):
+        await broker.submit(order, quote, None)

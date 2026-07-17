@@ -1,4 +1,4 @@
-environment: paper
+operating_mode: paper_manual
 mode: synthetic
 base_currency: USD
 starting_cash: 500000
@@ -30,7 +30,9 @@ risk:
   allow_market_orders: false
 execution:
   broker: simulated
-  auto_submit_paper: true
+  auto_submit_paper: false
+  broker_write_enabled: false
+  operator_api_enabled: false
   require_human_approval_live: true
   slippage_bps: 5
   commission_per_share: 0.005

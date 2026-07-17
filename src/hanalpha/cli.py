@@ -29,9 +29,11 @@ def doctor(
     """Validate local configuration and safety invariants."""
     config, secrets = load_config(config_path)
     rows = [
-        ("environment", config.environment),
+        ("operating mode", config.operating_mode.value),
         ("mode", config.mode),
         ("broker", config.execution.broker),
+        ("broker writes enabled", str(config.execution.broker_write_enabled)),
+        ("operator API enabled", str(config.execution.operator_api_enabled)),
         ("universe", str(len(config.universe))),
         ("ledger", secrets.hanalpha_ledger_path),
         ("IBKR port", str(secrets.ibkr_port)),
@@ -43,8 +45,10 @@ def doctor(
     for key, value in rows:
         table.add_row(key, value)
     console.print(table)
-    if config.environment == "live":
-        console.print("[bold red]LIVE configuration loaded. Orders still require human approval.[/bold red]")
+    if config.operating_mode.value == "live_proposal":
+        console.print(
+            "[bold red]LIVE PROPOSAL configuration loaded. Broker writes are structurally disabled.[/bold red]"
+        )
     else:
         console.print("[green]Configuration validated.[/green]")
 
@@ -145,10 +149,10 @@ def serve(
     port: int = 8000,
     reload: bool = False,
 ) -> None:
-    """Start the local API. Bind to localhost unless you have added authentication."""
+    """Start the local API. Mutating routes are disabled unless explicitly authorized."""
     if host not in {"127.0.0.1", "localhost"}:
         console.print(
-            "[bold yellow]Warning: API has no remote authentication. Do not expose it to the internet.[/bold yellow]"
+            "[bold yellow]Warning: read routes are unauthenticated. Do not expose this API to the internet.[/bold yellow]"
         )
     uvicorn.run("hanalpha.api.main:app", host=host, port=port, reload=reload)
 

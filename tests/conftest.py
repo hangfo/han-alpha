@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from hanalpha.config import AppConfig
+from hanalpha.config import AppConfig, SecretSettings
 from hanalpha.domain.enums import MarketRegime, Side, SignalAction
 from hanalpha.domain.models import (
     AccountSnapshot,
@@ -13,6 +13,7 @@ from hanalpha.domain.models import (
     Signal,
     TradePlan,
 )
+from hanalpha.runtime.capabilities import BrokerWriteCapability, RuntimeAccess, build_runtime_access
 
 
 @pytest.fixture
@@ -87,7 +88,7 @@ def plan(now: datetime) -> TradePlan:
 def risk_config() -> AppConfig:
     return AppConfig.model_validate(
         {
-            "environment": "paper",
+            "operating_mode": "paper_auto",
             "mode": "synthetic",
             "base_currency": "USD",
             "starting_cash": 100000,
@@ -113,6 +114,8 @@ def risk_config() -> AppConfig:
             "execution": {
                 "broker": "simulated",
                 "auto_submit_paper": True,
+                "broker_write_enabled": True,
+                "operator_api_enabled": False,
                 "require_human_approval_live": True,
                 "slippage_bps": 5,
                 "commission_per_share": 0.005,
@@ -139,3 +142,18 @@ def risk_config() -> AppConfig:
             },
         }
     )
+
+
+@pytest.fixture
+def runtime_access(risk_config: AppConfig) -> RuntimeAccess:
+    secrets = SecretSettings(
+        _env_file=None,
+        hanalpha_broker_write_token="b" * 32,
+    )
+    return build_runtime_access(risk_config, secrets)
+
+
+@pytest.fixture
+def broker_write_capability(runtime_access: RuntimeAccess) -> BrokerWriteCapability:
+    assert runtime_access.broker_write is not None
+    return runtime_access.broker_write

@@ -8,6 +8,7 @@ from typing import Any
 
 from hanalpha.domain.enums import OrderStatus, Side
 from hanalpha.domain.models import AccountSnapshot, OrderEvent, OrderRequest, Position, Quote
+from hanalpha.runtime.capabilities import BrokerWriteCapability, require_broker_write
 
 try:
     from ibapi.client import EClient
@@ -201,7 +202,13 @@ class IBKRBroker:
             self.app.next_order_id += count
             return list(range(start, start + count))
 
-    async def submit(self, request: OrderRequest, quote: Quote) -> list[OrderEvent]:
+    async def submit(
+        self,
+        request: OrderRequest,
+        quote: Quote,
+        capability: BrokerWriteCapability | None,
+    ) -> list[OrderEvent]:
+        require_broker_write(capability)
         if request.idempotency_key in self._idempotency:
             return [
                 OrderEvent(
@@ -309,7 +316,10 @@ class IBKRBroker:
             self.app.order_events.clear()
         return events
 
-    async def cancel_all(self) -> list[OrderEvent]:
+    async def cancel_all(
+        self, capability: BrokerWriteCapability | None
+    ) -> list[OrderEvent]:
+        require_broker_write(capability)
         self.app.reqGlobalCancel()
         await asyncio.sleep(0.2)
         return [
@@ -320,7 +330,12 @@ class IBKRBroker:
             )
         ]
 
-    async def flatten_all(self, quotes: dict[str, Quote]) -> list[OrderEvent]:
+    async def flatten_all(
+        self,
+        quotes: dict[str, Quote],
+        capability: BrokerWriteCapability | None,
+    ) -> list[OrderEvent]:
+        require_broker_write(capability)
         events: list[OrderEvent] = []
         snapshot = await self.get_account_snapshot()
         for position in snapshot.positions:
@@ -347,4 +362,3 @@ class IBKRBroker:
                 )
             )
         return events
-

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from hanalpha.agents.base import ResearchAgent
 from hanalpha.domain.enums import SignalAction
 from hanalpha.domain.models import AgentAssessment, Evidence, RegimeSnapshot, Signal
@@ -14,8 +16,11 @@ class AgentCommittee:
         signal: Signal,
         evidence: list[Evidence],
         regime: RegimeSnapshot,
+        as_of: datetime,
     ) -> tuple[bool, list[AgentAssessment]]:
-        assessments = [await agent.assess(signal, evidence, regime) for agent in self.agents]
+        assessments = [
+            await agent.assess(signal, evidence, regime, as_of) for agent in self.agents
+        ]
         vetoed = any(item.veto or item.action == SignalAction.VETO for item in assessments)
         if vetoed:
             return False, assessments

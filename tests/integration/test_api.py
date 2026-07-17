@@ -18,11 +18,12 @@ def test_api_lifecycle_and_controls(monkeypatch, tmp_path: Path) -> None:
         assert health.status_code == 200
         assert health.json()["ok"]
         cycle = client.post("/cycles/run")
-        assert cycle.status_code == 200
-        assert cycle.json()["cycle"] == 1
+        assert cycle.status_code == 403
         frozen = client.post("/risk/freeze", json={"reason": "operator test"})
-        assert frozen.json()["frozen"]
+        assert frozen.status_code == 403
         unfrozen = client.post("/risk/unfreeze")
-        assert not unfrozen.json()["frozen"]
+        assert unfrozen.status_code == 403
+        assert client.post("/orders/cancel-all").status_code == 403
+        assert client.post("/positions/flatten-all").status_code == 403
         events = client.get("/events")
         assert events.status_code == 200

@@ -34,7 +34,10 @@ class MarketRegime(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
-class Environment(StrEnum):
-    PAPER = "paper"
-    LIVE = "live"
+class OperatingMode(StrEnum):
+    RESEARCH = "research"
     BACKTEST = "backtest"
+    SHADOW = "shadow"
+    PAPER_MANUAL = "paper_manual"
+    PAPER_AUTO = "paper_auto"
+    LIVE_PROPOSAL = "live_proposal"

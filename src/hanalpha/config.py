@@ -5,8 +5,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from hanalpha.domain.enums import OperatingMode
 
 
 class FrozenModel(BaseModel):
@@ -31,7 +33,9 @@ class RiskConfig(FrozenModel):
 
 class ExecutionConfig(FrozenModel):
     broker: Literal["simulated", "ibkr"] = "simulated"
-    auto_submit_paper: bool = True
+    auto_submit_paper: bool = False
+    broker_write_enabled: bool = False
+    operator_api_enabled: bool = False
     require_human_approval_live: bool = True
     slippage_bps: float = Field(ge=0, le=100)
     commission_per_share: float = Field(ge=0, le=1)
@@ -62,7 +66,7 @@ class StrategyConfig(FrozenModel):
 
 
 class AppConfig(FrozenModel):
-    environment: Literal["paper", "live", "backtest"] = "paper"
+    operating_mode: OperatingMode = OperatingMode.RESEARCH
     mode: Literal["synthetic", "external"] = "synthetic"
     base_currency: str = "USD"
     starting_cash: float = Field(gt=0)
@@ -75,15 +79,44 @@ class AppConfig(FrozenModel):
     agents: AgentConfig
     strategies: dict[str, StrategyConfig]
 
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_environment(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or "environment" not in data:
+            return data
+        migrated = dict(data)
+        legacy = migrated.pop("environment")
+        execution = migrated.get("execution", {})
+        auto_submit = bool(execution.get("auto_submit_paper", False))
+        mapping = {
+            "paper": OperatingMode.PAPER_AUTO if auto_submit else OperatingMode.PAPER_MANUAL,
+            "live": OperatingMode.LIVE_PROPOSAL,
+            "backtest": OperatingMode.BACKTEST,
+        }
+        if legacy not in mapping:
+            raise ValueError(f"unsupported legacy environment: {legacy}")
+        migrated.setdefault("operating_mode", mapping[legacy])
+        return migrated
+
     @model_validator(mode="after")
-    def live_safety(self) -> AppConfig:
-        if self.environment == "live":
+    def safety_boundaries(self) -> AppConfig:
+        mode = self.operating_mode
+        execution = self.execution
+        if mode == OperatingMode.LIVE_PROPOSAL:
             if self.execution.broker != "ibkr":
-                raise ValueError("live environment requires IBKR broker")
+                raise ValueError("live_proposal mode requires IBKR broker")
             if not self.execution.require_human_approval_live:
-                raise ValueError("live environment requires human approval")
-            if self.execution.auto_submit_paper:
-                raise ValueError("paper auto-submit flag must be false in live environment")
+                raise ValueError("live_proposal mode requires human approval")
+        if mode == OperatingMode.PAPER_AUTO:
+            if not execution.auto_submit_paper or not execution.broker_write_enabled:
+                raise ValueError(
+                    "paper_auto requires auto_submit_paper and broker_write_enabled"
+                )
+        elif execution.auto_submit_paper:
+            raise ValueError("auto_submit_paper is only valid in paper_auto mode")
+        if mode not in {OperatingMode.PAPER_MANUAL, OperatingMode.PAPER_AUTO}:
+            if execution.broker_write_enabled:
+                raise ValueError(f"broker writes are forbidden in {mode.value} mode")
         if self.agents.allow_llm_to_size:
             raise ValueError("LLM position sizing is forbidden")
         return self
@@ -105,6 +138,8 @@ class SecretSettings(BaseSettings):
     ibkr_port: int = 4002
     ibkr_client_id: int = 41
     ibkr_account: str | None = None
+    hanalpha_broker_write_token: SecretStr | None = None
+    hanalpha_operator_token: SecretStr | None = None
 
 
 def load_config(path: str | Path | None = None) -> tuple[AppConfig, SecretSettings]:

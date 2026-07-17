@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
 
 import httpx
 from pydantic import ValidationError
 
 from hanalpha.agents.firewall import sanitize_untrusted_text
+from hanalpha.domain.clock import ensure_aware_utc
 from hanalpha.domain.enums import SignalAction
 from hanalpha.domain.models import AgentAssessment, Evidence, RegimeSnapshot, Signal
 
@@ -31,7 +33,13 @@ class LLMResearchAgent:
         self.timeout = timeout
         self._external_client = client
 
-    def _payload(self, signal: Signal, evidence: list[Evidence], regime: RegimeSnapshot) -> dict[str, Any]:
+    def _payload(
+        self,
+        signal: Signal,
+        evidence: list[Evidence],
+        regime: RegimeSnapshot,
+        as_of: datetime,
+    ) -> dict[str, Any]:
         safe_evidence = [
             {
                 "evidence_id": item.evidence_id,
@@ -59,6 +67,7 @@ class LLMResearchAgent:
                             "signal": signal.model_dump(mode="json"),
                             "regime": regime.model_dump(mode="json"),
                             "evidence": safe_evidence,
+                            "as_of": ensure_aware_utc(as_of).isoformat(),
                         },
                         separators=(",", ":"),
                     ),
@@ -72,13 +81,14 @@ class LLMResearchAgent:
         signal: Signal,
         evidence: list[Evidence],
         regime: RegimeSnapshot,
+        as_of: datetime,
     ) -> AgentAssessment:
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         if self._external_client is not None:
             response = await self._external_client.post(
                 f"{self.base_url}/responses",
                 headers=headers,
-                json=self._payload(signal, evidence, regime),
+                json=self._payload(signal, evidence, regime, as_of),
             )
             response.raise_for_status()
             data = response.json()
@@ -87,7 +97,7 @@ class LLMResearchAgent:
                 response = await client.post(
                     f"{self.base_url}/responses",
                     headers=headers,
-                    json=self._payload(signal, evidence, regime),
+                    json=self._payload(signal, evidence, regime, as_of),
                 )
                 response.raise_for_status()
                 data = response.json()

@@ -14,6 +14,7 @@ from hanalpha.domain.models import (
     Position,
     Quote,
 )
+from hanalpha.runtime.capabilities import BrokerWriteCapability, require_broker_write
 
 
 @dataclass
@@ -56,11 +57,11 @@ class SimulatedBroker:
     def _commission(self, quantity: int) -> float:
         return max(self.config.minimum_commission, quantity * self.config.commission_per_share)
 
-    def _slipped_price(self, quote: Quote, side: Side) -> float:
+    def _slipped_price(self, quote: Quote, side: Side, limit_price: float) -> float:
         multiplier = self.config.slippage_bps / 10_000
         if side == Side.BUY:
-            return quote.ask * (1 + multiplier)
-        return quote.bid * (1 - multiplier)
+            return min(quote.ask * (1 + multiplier), limit_price)
+        return max(quote.bid * (1 - multiplier), limit_price)
 
     def _mark_to_market(self) -> float:
         return self.cash + sum(position.market_value for position in self.positions.values())
@@ -79,7 +80,13 @@ class SimulatedBroker:
             connected=self._connected,
         )
 
-    async def submit(self, order: OrderRequest, quote: Quote) -> list[OrderEvent]:
+    async def submit(
+        self,
+        order: OrderRequest,
+        quote: Quote,
+        capability: BrokerWriteCapability | None,
+    ) -> list[OrderEvent]:
+        require_broker_write(capability)
         async with self._lock:
             if not self._connected:
                 return [
@@ -118,7 +125,7 @@ class SimulatedBroker:
         )
         if not marketable:
             return []
-        fill_price = self._slipped_price(quote, order.side)
+        fill_price = self._slipped_price(quote, order.side, order.limit_price)
         commission = self._commission(order.quantity)
         notional = fill_price * order.quantity
         if order.side == Side.BUY and notional + commission > self.cash:
@@ -240,7 +247,10 @@ class SimulatedBroker:
                     events.extend(self._try_fill(exit_order, quote))
             return events
 
-    async def cancel_all(self) -> list[OrderEvent]:
+    async def cancel_all(
+        self, capability: BrokerWriteCapability | None
+    ) -> list[OrderEvent]:
+        require_broker_write(capability)
         async with self._lock:
             events = [
                 OrderEvent(
@@ -254,7 +264,12 @@ class SimulatedBroker:
             self.open_orders.clear()
             return events
 
-    async def flatten_all(self, quotes: dict[str, Quote]) -> list[OrderEvent]:
+    async def flatten_all(
+        self,
+        quotes: dict[str, Quote],
+        capability: BrokerWriteCapability | None,
+    ) -> list[OrderEvent]:
+        require_broker_write(capability)
         events: list[OrderEvent] = []
         for symbol, position in list(self.positions.items()):
             quote = quotes.get(symbol)
@@ -279,5 +294,5 @@ class SimulatedBroker:
                 target_price=max(0.01, quote.bid * 0.9),
                 idempotency_key=f"flatten:{symbol}:{position.quantity}",
             )
-            events.extend(await self.submit(order, quote))
+            events.extend(await self.submit(order, quote, capability))
         return events

@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from hanalpha.domain.clock import ensure_aware_utc
 from hanalpha.domain.enums import MarketRegime, OrderStatus, Side, SignalAction
 
 
@@ -55,7 +56,7 @@ class Quote(StrictModel):
         return self
 
     def age_seconds(self, now: datetime | None = None) -> float:
-        ref = now or utc_now()
+        ref = ensure_aware_utc(now or utc_now(), name="now")
         return max(0.0, (ref - self.timestamp).total_seconds())
 
 

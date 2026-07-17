@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from hanalpha.config import load_config
@@ -49,6 +49,21 @@ def get_system() -> TradingSystem:
     return state.system
 
 
+def require_operator_access(
+    token: Annotated[str | None, Header(alias="X-Hanalpha-Operator-Token")] = None,
+) -> None:
+    system = get_system()
+    if not system.runtime_access.authorize_operator(token):
+        raise HTTPException(status_code=403, detail="operator_api_disabled_or_unauthorized")
+
+
+def require_broker_write_access(
+    _: Annotated[None, Depends(require_operator_access)],
+) -> None:
+    if not get_system().runtime_access.capabilities.broker_write:
+        raise HTTPException(status_code=403, detail="broker_write_capability_unavailable")
+
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
     system = get_system()
@@ -63,7 +78,7 @@ async def status() -> dict[str, Any]:
 
 
 @app.post("/cycles/run")
-async def run_cycle() -> dict[str, Any]:
+async def run_cycle(_: Annotated[None, Depends(require_operator_access)]) -> dict[str, Any]:
     return await get_system().run_cycle()
 
 
@@ -85,33 +100,32 @@ async def events(limit: int = 100) -> list[dict[str, Any]]:
 
 
 @app.post("/risk/freeze")
-async def freeze(request: FreezeRequest) -> dict[str, Any]:
+async def freeze(
+    request: FreezeRequest,
+    _: Annotated[None, Depends(require_operator_access)],
+) -> dict[str, Any]:
     system = get_system()
     system.kill_switch.freeze(request.reason)
     return {"frozen": True, "reason": system.kill_switch.reason}
 
 
 @app.post("/risk/unfreeze")
-async def unfreeze() -> dict[str, Any]:
+async def unfreeze(_: Annotated[None, Depends(require_operator_access)]) -> dict[str, Any]:
     system = get_system()
-    if system.config.environment == "live":
-        raise HTTPException(status_code=403, detail="live_unfreeze_requires_local_operator")
     system.kill_switch.unfreeze()
     return {"frozen": False}
 
 
 @app.post("/orders/cancel-all")
-async def cancel_all() -> dict[str, Any]:
+async def cancel_all(_: Annotated[None, Depends(require_broker_write_access)]) -> dict[str, Any]:
     system = get_system()
     system.kill_switch.freeze("cancel_all_requested")
-    result = await system.broker.cancel_all()
-    for event in result:
-        system.ledger.record_order_event(event)
+    result = await system.cancel_all()
     return {"events": [event.model_dump(mode="json") for event in result]}
 
 
 @app.post("/positions/flatten-all")
-async def flatten_all() -> dict[str, Any]:
+async def flatten_all(_: Annotated[None, Depends(require_broker_write_access)]) -> dict[str, Any]:
     system = get_system()
     system.kill_switch.freeze("flatten_all_requested")
     snapshot = await system.broker.get_account_snapshot()
@@ -119,7 +133,5 @@ async def flatten_all() -> dict[str, Any]:
         position.symbol: await system.provider.get_quote(position.symbol)
         for position in snapshot.positions
     }
-    result = await system.broker.flatten_all(quotes)
-    for event in result:
-        system.ledger.record_order_event(event)
+    result = await system.flatten_all(quotes)
     return {"events": [event.model_dump(mode="json") for event in result]}

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from hanalpha.agents.firewall import contains_prompt_injection
+from hanalpha.domain.clock import ensure_aware_utc
 from hanalpha.domain.enums import MarketRegime, SignalAction
-from hanalpha.domain.models import AgentAssessment, Evidence, RegimeSnapshot, Signal, utc_now
+from hanalpha.domain.models import AgentAssessment, Evidence, RegimeSnapshot, Signal
 
 
 class EvidenceAgent:
@@ -15,7 +16,9 @@ class EvidenceAgent:
         signal: Signal,
         evidence: list[Evidence],
         regime: RegimeSnapshot,
+        as_of: datetime,
     ) -> AgentAssessment:
+        ensure_aware_utc(as_of)
         evidence_ids = {item.evidence_id for item in evidence}
         missing = [item for item in signal.evidence_ids if item not in evidence_ids]
         if signal.strategy == "event_continuation" and (not signal.evidence_ids or missing):
@@ -45,8 +48,9 @@ class SkepticAgent:
         signal: Signal,
         evidence: list[Evidence],
         regime: RegimeSnapshot,
+        as_of: datetime,
     ) -> AgentAssessment:
-        now = utc_now()
+        now = ensure_aware_utc(as_of)
         reasons: list[str] = []
         if regime.regime in {MarketRegime.RISK_OFF, MarketRegime.UNKNOWN} and signal.strategy == "breakout":
             reasons.append("breakout_not_allowed_in_current_regime")
@@ -77,7 +81,9 @@ class MarketAlignmentAgent:
         signal: Signal,
         evidence: list[Evidence],
         regime: RegimeSnapshot,
+        as_of: datetime,
     ) -> AgentAssessment:
+        ensure_aware_utc(as_of)
         allowed = signal.strategy in regime.allowed_strategies
         return AgentAssessment(
             agent_name=self.name,

@@ -1,5 +1,5 @@
 # Intentionally inactive. Copy only after paper validation and a separate security review.
-environment: live
+operating_mode: live_proposal
 mode: external
 base_currency: USD
 starting_cash: 0
@@ -24,6 +24,8 @@ risk:
 execution:
   broker: ibkr
   auto_submit_paper: false
+  broker_write_enabled: false
+  operator_api_enabled: false
   require_human_approval_live: true
   slippage_bps: 8
   commission_per_share: 0.005
