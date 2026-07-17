@@ -1,0 +1,17 @@
+version: 1
+project: han-alpha
+entrypoint: CODEX_START_HERE.md
+active_plan: docs/exec-plans/active/001-complete-platform.md
+acceptance: docs/codex/ACCEPTANCE_CRITERIA.md
+required_commands:
+  - ./scripts/preflight.sh
+  - ./scripts/verify_all.sh
+safety:
+  unattended_live_trading: forbidden
+  llm_broker_access: forbidden
+  llm_position_sizing: forbidden
+  synthetic_mode_required: true
+completion_states:
+  - VERIFIED
+  - BLOCKED
+  - NOT_IMPLEMENTED

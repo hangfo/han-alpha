@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "han-alpha"
+version = "0.1.0"
+description = "Evidence-grounded multi-agent trading research and IBKR paper execution system"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "Proprietary"}
+authors = [{name = "Han Alpha"}]
+dependencies = [
+  "fastapi>=0.116,<1",
+  "uvicorn[standard]>=0.35,<1",
+  "pydantic>=2.11,<3",
+  "pydantic-settings>=2.10,<3",
+  "PyYAML>=6.0,<7",
+  "httpx>=0.28,<1",
+  "typer>=0.16,<1",
+  "rich>=14,<15",
+  "numpy>=2.2,<3",
+  "python-dateutil>=2.9,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.0,<2",
+  "coverage[toml]>=7.9,<8",
+  "pytest-cov>=6.2,<7",
+  "build>=1.2,<2",
+  "ruff>=0.12,<1",
+  "mypy>=1.16,<2",
+  "types-PyYAML>=6.0,<7",
+]
+
+[project.scripts]
+hanalpha = "hanalpha.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hanalpha"]
+
+[tool.pytest.ini_options]
+addopts = "-q --strict-markers"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+
+[tool.coverage.run]
+source = ["hanalpha"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+
+[[tool.mypy.overrides]]
+module = "ibapi.*"
+ignore_missing_imports = true

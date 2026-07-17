@@ -1,0 +1,12 @@
+services:
+  hanalpha:
+    build:
+      context: ..
+    env_file:
+      - ../.env
+    volumes:
+      - ../.state:/app/.state
+      - ../configs:/app/configs:ro
+    ports:
+      - "8000:8000"
+    restart: unless-stopped

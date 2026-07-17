@@ -1,0 +1,66 @@
+environment: paper
+mode: synthetic
+base_currency: USD
+starting_cash: 500000
+universe:
+  - NVDA
+  - CRDO
+  - ANET
+  - MU
+  - PLTR
+  - AVGO
+benchmarks:
+  market: SPY
+  growth: QQQ
+bar_interval_minutes: 5
+lookback_bars: 120
+risk:
+  risk_per_trade_pct: 0.0035
+  max_symbol_weight: 0.07
+  max_sector_weight: 0.25
+  max_gross_exposure: 0.50
+  max_positions: 8
+  daily_loss_limit_pct: 0.01
+  max_drawdown_limit_pct: 0.05
+  max_order_notional: 50000
+  max_quote_age_seconds: 20
+  min_price: 5
+  min_average_dollar_volume: 50000000
+  allow_earnings_overnight: false
+  allow_market_orders: false
+execution:
+  broker: simulated
+  auto_submit_paper: true
+  require_human_approval_live: true
+  slippage_bps: 5
+  commission_per_share: 0.005
+  minimum_commission: 1.0
+  order_ttl_seconds: 30
+agents:
+  enabled: true
+  provider: deterministic
+  require_evidence: true
+  allow_llm_to_size: false
+  max_news_age_hours: 72
+strategies:
+  breakout:
+    enabled: true
+    fast_window: 20
+    slow_window: 55
+    atr_window: 14
+    breakout_buffer_atr: 0.05
+    stop_atr: 2.0
+    target_r_multiple: 2.5
+  pullback:
+    enabled: true
+    trend_window: 50
+    pullback_window: 10
+    atr_window: 14
+    stop_atr: 1.8
+    target_r_multiple: 2.2
+  event_continuation:
+    enabled: true
+    min_catalyst_score: 0.70
+    max_catalyst_age_hours: 48
+    stop_atr: 2.0
+    target_r_multiple: 3.0
