@@ -98,10 +98,21 @@ Passed without network, vendor, LLM or broker access:
 - direct offline M0 safety smoke: PASS for mode/capability denial, missing token denial, nonexistent `live_auto`, naive clock rejection and buy/sell limit semantics;
 - direct offline full synthetic `paper_manual` cycle: PASS with Broker write capability false.
 
-Canonical full verification is **BLOCKED, not passed**:
+The initial missing-toolchain blocker was resolved after explicit authorization. Final canonical verification passed twice: once in the project `.venv`, then in a newly created clean Python 3.12.13 environment installed from `requirements-dev.lock` with `--require-hashes`.
 
-- `scripts/verify_all.sh` stopped at `ruff: command not found`;
-- the available runtimes also lack the complete declared dev dependency set for full pytest, mypy and package build;
-- dependencies were not downloaded because this M0 run was explicitly local/no-network.
+Final results:
 
-Therefore the earlier V0.1 32-test/coverage evidence remains historical only. It must not be used as proof that the M0 diff is fully green. M1 remains gated on a fresh successful `scripts/verify_all.sh` run in a clean Python >=3.12 environment.
+- `ruff check src tests`: PASS;
+- `mypy src` strict: PASS, 46 source files;
+- pytest: PASS, 48 tests;
+- branch-aware coverage: 72.02%, required threshold 70%;
+- sdist/wheel build with no isolation: PASS;
+- CLI doctor: PASS, `paper_manual`, all write capabilities false;
+- synthetic demo, three cycles: PASS;
+- synthetic 400-bar baseline backtest: PASS;
+- `pip check`: PASS;
+- clean hash-locked environment reproduction: PASS.
+
+The test run emits one upstream Starlette/FastAPI TestClient deprecation warning. It is non-fatal, not suppressed, and does not alter the M0 result. The earlier V0.1 32-test evidence remains historical; the 48-test result is the M0 baseline.
+
+M0 is VERIFIED. This authorizes local M1 PIT implementation only; it does not authorize vendor, LLM or broker access and does not establish alpha or production readiness.

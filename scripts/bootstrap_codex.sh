@@ -17,7 +17,7 @@ fi
 python -m pip install --upgrade pip
 if test -f requirements-dev.lock; then
   python -m pip install --require-hashes -r requirements-dev.lock
-  python -m pip install --no-deps -e .
+  python -m pip install --no-deps --no-build-isolation -e .
 else
   python -m pip install -e '.[dev]'
 fi

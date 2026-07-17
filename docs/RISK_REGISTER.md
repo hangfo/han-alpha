@@ -8,7 +8,6 @@ Updated: 2026-07-18 after M0 code checkpoint `43b77f4`.
 | R-002 | P0 | Unauthorized order submission | Capability-gated Broker methods; non-paper modes cannot obtain capability; no `live_auto` | Process/OS separation and durable single-writer lease in M5 |
 | R-003 | P0 | Local HTTP mutation without operator intent | Every POST defaults to 403; distinct operator token when enabled | Authenticated session, CSRF, actor audit and double confirmation in M7 |
 | R-004 | P0 | Simulated fill violates limit semantics | Buy fill capped at limit; sell fill floored at limit; adversarial tests added | Partial fills, queue/volume, halts and gap behavior in M2 |
-| R-005 | P1 | M0 regressions are undiscovered because the local dev toolchain is incomplete | Preflight, compile, diff check and offline smoke passed | Install the pinned dev environment and run ruff/mypy/full pytest before M1 code |
 | R-006 | P1 | V0.1 synthetic metrics are mistaken for alpha | Documentation labels them engineering-only | M1 real PIT fixtures, then M2/M3 preregistered OOS evaluation |
 | R-007 | P1 | Broker/local state diverges after callbacks, restart or nightly reset | Idempotency and ledger baseline only | Durable state machine, reservations, outbox and reconciler in M5–M6 |
 | R-008 | P1 | Decision outputs remain partly nondeterministic because providers/events use wall clock | Orchestrator and agents use DecisionClock | Propagate snapshot/as-of contracts through providers in M1 and execution simulation in M2 |
@@ -18,3 +17,5 @@ Updated: 2026-07-18 after M0 code checkpoint `43b77f4`.
 | R-012 | P2 | Overbuilding UI/agents before data truth wastes effort | Milestone gates put PIT and backtest first | Do not start dashboard or new LLM agents before M1–M4 evidence gates |
 
 No risk above is evidence of profitability. P0 means a safety or validity blocker, not an estimate of likelihood.
+
+Resolved in M0: R-005, the missing-toolchain verification gap. A hash-locked Python 3.12 environment reproduced the full suite.

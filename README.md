@@ -1,6 +1,6 @@
 # Han Alpha Trading System
 
-> M0 status (2026-07-18): safety code is implemented, but canonical ruff/mypy/full-pytest/build verification is blocked by the missing local dev toolchain. M1 PIT implementation must not start until `./scripts/verify_all.sh` passes. See `docs/v2-plan/07_M0_CLOSEOUT_AND_M1_DECISION_ZH.md`.
+> M0 status (2026-07-18): complete and reproduced from the hash-locked dependency set in a clean Python 3.12 environment. M1 PIT may start as a local fixture-driven data-kernel milestone. External data, LLM and broker access remain separately gated. See `docs/v2-plan/07_M0_CLOSEOUT_AND_M1_DECISION_ZH.md`.
 
 A directly runnable, evidence-grounded trading research and IBKR paper-execution system.
 
@@ -31,7 +31,8 @@ This repository is not a promise of profitability. Its purpose is to produce a s
 cd han-alpha
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -e '.[dev]'
+pip install --require-hashes -r requirements-dev.lock
+pip install --no-deps -e .
 cp .env.example .env
 hanalpha doctor
 hanalpha demo --cycles 10

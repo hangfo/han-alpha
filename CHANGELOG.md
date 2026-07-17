@@ -10,6 +10,7 @@
 - Runtime-issued Broker write capability and separate operator API token boundary.
 - Structural/adversarial tests for non-paper submission denial, naive time, limit prices and default-deny API behavior.
 - ADR, risk register, M0 execution plan and M1 PIT entry decision.
+- Hash-locked Python 3.12 development requirements and clean-environment bootstrap.
 
 ### Changed
 
@@ -17,6 +18,7 @@
 - Simulated buy/sell fills respect their limit prices after adverse slippage.
 - Broker `submit`, `cancel_all` and `flatten_all` require an explicit capability.
 - LLM reviewer payloads include the decision `as_of`; LLMs still have no Broker tool.
+- Package verification builds without isolation from the locked toolchain.
 
 ### Security
 
@@ -25,5 +27,5 @@
 
 ### Verification status
 
-- Preflight, compile, diff check and offline safety/full-cycle smoke passed.
-- Canonical ruff, mypy, full pytest/coverage and build are blocked by a missing local dev toolchain and remain required before M1.
+- M0 reproduced in a fresh hash-locked Python 3.12.13 environment.
+- Ruff passed; mypy strict passed for 46 source files; 48 tests passed at 72.02% branch-aware coverage; package build, doctor, demo and backtest passed.

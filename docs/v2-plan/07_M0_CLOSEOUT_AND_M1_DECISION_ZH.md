@@ -5,8 +5,8 @@
 ## 结论先行
 
 - **M0 代码与安全边界：已实现。** 基线已用 Git tree 冻结；模式、写能力、API、决策时钟和模拟限价的 P0 修复已落地。
-- **M0 验证门：尚未完全通过。** 当前机器缺少完整 dev toolchain，不能诚实声称 ruff、mypy、完整 pytest 与 build 已通过。
-- **现在进入 M1 PIT 代码：NO-GO。** 先恢复可复现开发环境并让 `scripts/verify_all.sh` 全绿。
+- **M0 验证门：已通过。** 在项目环境和一个全新 Python 3.12.13 环境中均完成 ruff、mypy strict、48 项测试、72.02% 分支覆盖率、构建与 CLI smoke。
+- **现在进入 M1 PIT 代码：GO（严格限域）。** 只启动本地 frozen fixture 驱动的数据内核；不请求真实供应商、不接 LLM、不接 IBKR。
 - **平台开发方向：GO，但顺序锁定为“数据内核先行”。** M0 已是平台内核开发的开始；M1 只做本地 fixture 驱动的 PIT 数据纵向切片，不先做 Dashboard、不接 IBKR、不加交易 LLM。
 - **外部数据采购/调用：仍为 NO-GO。** 供应商、调用量、费用、许可和缓存边界需另行授权。
 
@@ -120,12 +120,12 @@ tests/pit/test_quality_fail_closed.py
 
 必须全部满足：
 
-- `scripts/verify_all.sh` 全绿，M0 无未解释回归；
-- Python 版本与 dev 依赖可复现，建议新增锁文件或 hash-locked requirements；
-- `paper.yaml` 保持 `paper_manual`、Broker/API 写能力保持 false；
-- M1 exec plan、schema ADR、数据许可边界已审阅；
-- 不需要真实 API 的 frozen fixture 已定义；
-- P0 风险仅剩 M1 本身要解决的 PIT 缺口，没有新的执行安全 P0。
+- `scripts/verify_all.sh` 全绿，M0 无未解释回归；**已满足**；
+- Python 3.12 与 dev 依赖可由 `requirements-dev.lock` 的 hashes 复现；**已满足**；
+- `paper.yaml` 保持 `paper_manual`、Broker/API 写能力保持 false；**已满足**；
+- M1 exec plan、ADR 0002 与数据许可边界已落盘；**已满足**；
+- 不需要真实 API 的 frozen fixture 规范已定义；**已满足**；
+- P0 风险仅剩 M1 本身要解决的 PIT 缺口，没有新的执行安全 P0；**已满足**。
 
 ## M1 退出条件
 

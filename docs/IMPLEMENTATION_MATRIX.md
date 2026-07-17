@@ -12,7 +12,8 @@ Status values: `DONE` means implemented with local evidence; `PARTIAL` means use
 | Dangerous API default-deny | DONE | All POST routes require explicit operator capability; tests expect 403 |
 | Explicit aware decision time | PARTIAL | Orchestrator/agents use `DecisionClock`; provider/execution wall-clock removal continues in M1/M2 |
 | Simulated limit semantics | DONE | Buy cannot fill above limit; sell cannot fill below limit; unit tests |
-| Direct local synthetic run | PARTIAL | V0.1 baseline and offline M0 full-cycle smoke; canonical full suite pending toolchain |
+| Direct local synthetic run | DONE M0 | Canonical suite, build, doctor, demo and backtest reproduced from hash lock |
+| Reproducible Python dev environment | DONE M0 | `.python-version`, `requirements-dev.lock`, locked bootstrap and no-isolation build |
 | Deterministic risk baseline | PARTIAL | V0.1 engine exists; order reservations/worst-case portfolio risk are M2/M5 |
 | Idempotent order baseline | PARTIAL | Ledger and broker-local checks exist; atomic reservation/outbox/replay are M5 |
 | Prompt-injection defense | PARTIAL | Deterministic firewall and schema checks exist; frozen eval/caching/ablation are M4 |
