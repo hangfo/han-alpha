@@ -151,3 +151,39 @@ Frozen fixture v1 evidence:
 - records: 20; publication state: `published`; issues: 0.
 
 M1 is VERIFIED for the repository-owned synthetic fixture boundary. It does not prove production calendar completeness, vendor PIT correctness, strategy profitability, portfolio replay parity or broker readiness. M2 may start locally; real data remains separately gated.
+
+## M2 deterministic portfolio replay verification - 2026-07-18
+
+Implemented without vendor, LLM, IBKR or order access:
+
+- revision-aware `PITEventCursor` over the published M1 `AsOfRepository`;
+- canonical decision hashes and a parity harness shared across replaceable adapters;
+- explicit order transitions and next-eligible-bar market/limit/stop fills with
+  partial quantity, participation, cost scenarios, halt, gap and expiry behavior;
+- Decimal shared-cash ledger, FIFO lots, commissions, atomic cash/gross/symbol/
+  position/per-trade/aggregate-risk reservations and split/dividend/delisting events;
+- canonical experiment manifests, append-only legal state transitions, Strategy
+  Cemetery, counterfactual links, immutable artifact digests and deterministic
+  JSON/HTML results;
+- end-to-end local experiment runner for success and failure lifecycle closure;
+- V0.1 next-bar-equity and gap-stop semantic regressions fixed;
+- Python 3.12 hash-locked CI aligned with the full local verification contract.
+
+Canonical result, repeated in the project environment and a newly created clean
+Python 3.12.13 environment installed from `requirements-dev.lock --require-hashes`:
+
+- `scripts/preflight.sh`: PASS;
+- `scripts/verify_all.sh`: PASS;
+- Ruff: PASS;
+- mypy strict: PASS, 72 source files;
+- pytest: PASS, 110 tests;
+- branch-aware coverage: 80.14%, required threshold 70%;
+- sdist/wheel, doctor, three-cycle demo and 400-bar synthetic baseline backtest: PASS;
+- `pip check` and `git diff --check`: PASS.
+
+The one warning is the already documented upstream Starlette/FastAPI TestClient
+deprecation. M2 is VERIFIED only as a local deterministic replay and experiment
+mechanics boundary. It does not validate real vendor timestamps, queue/depth or
+auction behavior, sector PIT data, strategy alpha, IBKR Paper or live execution.
+M3 may proceed to preregistration and strategy-evidence design; any real data
+acquisition remains separately permission-gated.

@@ -6,7 +6,7 @@
 - Python compile;
 - Ruff lint;
 - strict configuration validation;
-- optional mypy after adapter stubs mature.
+- strict mypy for all source modules.
 
 ## Unit tests
 
@@ -43,6 +43,17 @@
 - bracket entry and target/stop exit;
 - API startup and health;
 - kill-switch control flow.
+
+## M2 replay and experiment tests
+
+- published snapshot/as-of cursor and late-revision visibility;
+- same-bar denial, next-eligible-bar fill, limits, stops, gaps, halts, volume and expiry;
+- shared-cash/gross/symbol/position/per-trade/aggregate-risk reservation conflicts;
+- partial-fill cash reconciliation, FIFO PnL, commissions, splits, dividends and delisting;
+- deterministic event/equity hashes and decision parity;
+- canonical manifests, append-only legal transitions, failed-run cemetery and counterfactual parent checks;
+- immutable JSON/HTML bundles, artifact digest registration and success/failure lifecycle closure;
+- local/CI hash-lock contract and generated cache-free project tree.
 
 ## Research validation
 

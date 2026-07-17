@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased - M2 deterministic portfolio replay (2026-07-18)
+
+### Added
+
+- Published-snapshot PIT replay cursor, canonical decision identity and historical/runtime parity harness.
+- Explicit order states with market/limit/stop behavior, next-eligible-bar timing, partial fills, participation limits, cost scenarios, gaps, halts and expiry release.
+- Decimal shared-capital portfolio ledger with atomic cash/exposure/risk reservations, FIFO lots, commissions, splits, dividends, delisting recovery and conservation checks.
+- Canonical experiment registry with append-only trial history, Strategy Cemetery, counterfactual linkage, immutable artifact digests and deterministic JSON/HTML result bundles.
+- End-to-end local experiment runner that records both completed and failed runs.
+- Git-content project-tree generator and CI parity tests.
+
+### Fixed
+
+- The V0.1 backtester no longer marks a next-bar position in the prior bar's equity.
+- Gap-through-stop exits now use the adverse opening price rather than the stale stop; entry and exit commissions reconcile separately.
+
+### Changed
+
+- GitHub Actions now uses the same Python 3.12 hash lock, preflight, full verification and `pip check` contract as local development.
+- Milestone numbering now follows M2 replay, M3 strategy evidence, M4 LLM evidence, M5 execution control, M6 IBKR Paper, M7 Ops and M8 Live Proposal.
+
+### Verification and safety
+
+- Ruff and strict mypy passed for 72 source files; 110 tests passed at 80.14% branch-aware coverage.
+- Build, doctor, three-cycle demo, 400-bar baseline backtest and `pip check` passed locally and in a clean hash-locked Python 3.12.13 environment.
+- No vendor, LLM, IBKR or order call was made. M2 validates mechanics, not profitability, capacity or production venue behavior.
+
 ## Unreleased - M1 PIT data kernel (2026-07-18)
 
 ### Added

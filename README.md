@@ -1,6 +1,6 @@
 # Han Alpha Trading System
 
-> M1 status (2026-07-18): the local frozen-fixture PIT kernel is complete and reproduced from the hash-locked dependency set in a clean Python 3.12 environment. This is an engineering/data-validity result, not market-data validation or evidence of alpha. External data, LLM and broker access remain separately gated.
+> M2 status (2026-07-18): deterministic local portfolio replay and the experiment lifecycle are complete and reproduced from the hash-locked dependency set in a clean Python 3.12 environment. This validates engineering mechanics only—not market-data semantics, venue fidelity, capacity or alpha. External data, LLM and broker access remain separately gated.
 
 A directly runnable, evidence-grounded trading research and IBKR paper-execution system.
 
@@ -21,6 +21,8 @@ The system is built around one rule: **LLMs may interpret evidence and veto trad
 - Event-driven baseline backtester.
 - Immutable local PIT raw/catalog/Parquet snapshots with typed as-of queries.
 - Frozen synthetic symbology, delisting, revision, corporate-action and DST fixtures.
+- Deterministic PIT portfolio replay with shared cash/risk reservations, explicit orders/fills, corporate actions and parity hashes.
+- Canonical experiment manifests, failed-trial cemetery and immutable JSON/HTML result artifacts.
 - Unit, integration, and adversarial tests.
 
 ## Safety boundary

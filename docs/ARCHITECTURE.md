@@ -46,6 +46,8 @@
 
 ### Execution plane
 
+- M2 `PortfolioReplayEngine` consumes published PIT frames through a deterministic cursor, then uses shared decision identities, atomic portfolio reservations, explicit order states and a replaceable historical exchange adapter.
+- The local Decimal ledger records cash, FIFO lots, commissions, aggregate open risk, splits, dividends and delisting recovery; experiment manifests and artifact hashes make replay results reproducible.
 - SimulatedBroker provides conservative adverse slippage, commissions, protection orders, cancel-all, and flatten-all.
 - IBKRBroker uses the official TWS API and bracket orders.
 - Order and execution callbacks are converted to internal OrderEvent records.

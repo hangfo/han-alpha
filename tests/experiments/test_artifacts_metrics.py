@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+
+import pytest
+
+from hanalpha.experiments.artifacts import ResultBundleWriter
+from hanalpha.experiments.models import ExperimentManifest, ExperimentResult
+from hanalpha.metrics.portfolio import EquityPoint, compute_portfolio_metrics
+
+
+def _manifest() -> ExperimentManifest:
+    return ExperimentManifest(
+        snapshot_id="1" * 64,
+        code_hash="2" * 64,
+        config_hash="3" * 64,
+        cost_policy_hash="4" * 64,
+        universe_hash="5" * 64,
+        metric_schema_version="1",
+        seed=7,
+        strategy_id="baseline",
+        strategy_version="1",
+        hypothesis="fixture mechanics only",
+        parameters={},
+    )
+
+
+def test_metrics_and_result_bundle_are_deterministic(tmp_path) -> None:
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    points = [
+        EquityPoint(
+            as_of=start + timedelta(days=index),
+            net_liquidation=Decimal(value),
+            cash=Decimal("1000"),
+            gross_exposure=Decimal("0.5") if index else Decimal("0"),
+        )
+        for index, value in enumerate(("10000", "10500", "10200", "11000"))
+    ]
+    metrics = compute_portfolio_metrics(points, total_traded_notional=Decimal("12000"))
+    assert metrics.total_return == Decimal("0.1")
+    assert metrics.max_drawdown > 0
+    result = ExperimentResult(
+        experiment_id=_manifest().experiment_id,
+        event_hash="6" * 64,
+        equity_hash="7" * 64,
+        metrics=metrics,
+        equity_points=points,
+        fill_count=4,
+    )
+    first = ResultBundleWriter().write(_manifest(), result, tmp_path / "first")
+    second = ResultBundleWriter().write(_manifest(), result, tmp_path / "second")
+    assert first == second
+    assert (tmp_path / "first" / "report.html").read_text() == (
+        tmp_path / "second" / "report.html"
+    ).read_text()
+
+
+def test_result_bundle_refuses_to_overwrite_different_content(tmp_path) -> None:
+    directory = tmp_path / "result"
+    manifest = _manifest()
+    point = EquityPoint(
+        as_of=datetime(2024, 1, 1, tzinfo=UTC),
+        net_liquidation=Decimal("10000"),
+        cash=Decimal("10000"),
+        gross_exposure=Decimal("0"),
+    )
+    result = ExperimentResult(
+        experiment_id=manifest.experiment_id,
+        event_hash="6" * 64,
+        equity_hash="7" * 64,
+        metrics=compute_portfolio_metrics([point], total_traded_notional=Decimal("0")),
+        equity_points=[point],
+        fill_count=0,
+    )
+    ResultBundleWriter().write(manifest, result, directory)
+    with pytest.raises(RuntimeError, match="immutable"):
+        ResultBundleWriter().write(
+            manifest,
+            result.model_copy(update={"event_hash": "8" * 64}),
+            directory,
+        )
