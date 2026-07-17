@@ -7,7 +7,7 @@ cd "$repo_root"
 ruff check src tests
 mypy src
 pytest --cov=hanalpha --cov-branch --cov-report=term-missing --cov-fail-under=70
-python -m build
+python -m build --no-isolation
 hanalpha doctor
 hanalpha demo --cycles 3
 hanalpha backtest --symbol NVDA --bars 400

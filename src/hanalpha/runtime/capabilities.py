@@ -14,7 +14,7 @@ _MIN_TOKEN_LENGTH = 32
 
 
 class BrokerWriteCapability:
-    """Unforgeable-in-process authority required by every broker write method."""
+    """Opaque runtime-issued authority required by every broker write path."""
 
     __slots__ = ("_issuer", "operating_mode")
 

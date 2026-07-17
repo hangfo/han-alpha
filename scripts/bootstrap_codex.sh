@@ -15,7 +15,12 @@ fi
 
 . .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -e '.[dev]'
+if test -f requirements-dev.lock; then
+  python -m pip install --require-hashes -r requirements-dev.lock
+  python -m pip install --no-deps -e .
+else
+  python -m pip install -e '.[dev]'
+fi
 
 if test ! -d .git; then
   git init

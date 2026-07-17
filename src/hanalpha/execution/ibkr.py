@@ -280,8 +280,16 @@ class IBKRBroker:
         ]
 
     async def _submit_simple_limit(
-        self, *, symbol: str, side: Side, quantity: int, limit_price: float, internal_id: str
+        self,
+        *,
+        symbol: str,
+        side: Side,
+        quantity: int,
+        limit_price: float,
+        internal_id: str,
+        capability: BrokerWriteCapability | None,
     ) -> OrderEvent:
+        require_broker_write(capability)
         if not await self.is_connected():
             return OrderEvent(
                 order_id=internal_id,
@@ -359,6 +367,7 @@ class IBKRBroker:
                     quantity=abs(position.quantity),
                     limit_price=quote.bid if side == Side.SELL else quote.ask,
                     internal_id=internal_id,
+                    capability=capability,
                 )
             )
         return events

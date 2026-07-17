@@ -114,9 +114,11 @@ class AppConfig(FrozenModel):
                 )
         elif execution.auto_submit_paper:
             raise ValueError("auto_submit_paper is only valid in paper_auto mode")
-        if mode not in {OperatingMode.PAPER_MANUAL, OperatingMode.PAPER_AUTO}:
-            if execution.broker_write_enabled:
-                raise ValueError(f"broker writes are forbidden in {mode.value} mode")
+        if (
+            mode not in {OperatingMode.PAPER_MANUAL, OperatingMode.PAPER_AUTO}
+            and execution.broker_write_enabled
+        ):
+            raise ValueError(f"broker writes are forbidden in {mode.value} mode")
         if self.agents.allow_llm_to_size:
             raise ValueError("LLM position sizing is forbidden")
         return self

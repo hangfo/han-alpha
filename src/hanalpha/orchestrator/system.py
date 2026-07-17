@@ -16,7 +16,7 @@ from hanalpha.data.base import MarketDataProvider
 from hanalpha.data.polygon import PolygonMarketDataProvider
 from hanalpha.data.synthetic import SyntheticMarketDataProvider
 from hanalpha.domain.clock import DecisionClock, SystemDecisionClock, ensure_aware_utc
-from hanalpha.domain.enums import OperatingMode, OrderStatus
+from hanalpha.domain.enums import OrderStatus
 from hanalpha.domain.models import Evidence, OrderEvent, OrderRequest, Quote, Signal
 from hanalpha.execution.base import Broker
 from hanalpha.execution.ibkr import IBKRBroker
