@@ -1,0 +1,15 @@
+{
+  "fixture_version": "v1",
+  "generator_version": "hanalpha-pit-fixture-1",
+  "schema_version": "1",
+  "files": [
+    {"path": "raw/actions.jsonl", "sha256": "0ff6dbe635c0b1df9dfb3c1204313c38c2c52dfc854228adbf21c52095c21175", "classification": "publish"},
+    {"path": "raw/aliases.jsonl", "sha256": "fbc4da71fe16360fe328e0e00e5822225478362577432b86880d8c4921477614", "classification": "publish"},
+    {"path": "raw/bars.jsonl", "sha256": "78d8e5bac28346200b6c42ead1594cc4cae686dc709cf1630859e5c2e107c845", "classification": "publish"},
+    {"path": "raw/instruments.jsonl", "sha256": "59aaaecbf9bb3ed406b156aac10a43a9813ab241cd7f2d830a32724d440538a6", "classification": "publish"},
+    {"path": "invalid/naive_timestamp.jsonl", "sha256": "0e7a5316e981e67212756867bf79830b35d808243cd6680ff86a7fa2dc42d8e6", "classification": "reject_ingest"},
+    {"path": "invalid/orphan_action.jsonl", "sha256": "40993ac6ea2131244dc73e8bbc54c7e8129b9cf21a78328af0aa5fd1bc69590d", "classification": "reject_quality"},
+    {"path": "invalid/overlapping_alias.jsonl", "sha256": "cc072eabc1849e09d689b59384aa056235e32f46b7619a60e2565e78ec216c63", "classification": "reject_quality"},
+    {"path": "expected/decision_points.json", "sha256": "4037395c38996b3a7a93ac8ffca4709e241e46c40ab0522faaa6094a9b2b4176", "classification": "expected"}
+  ]
+}

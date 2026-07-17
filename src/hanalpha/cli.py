@@ -13,13 +13,61 @@ from rich.table import Table
 
 from hanalpha.backtest import BacktestEngine
 from hanalpha.config import load_config
+from hanalpha.data.fixtures import run_fixture_pipeline
 from hanalpha.data.synthetic import SyntheticMarketDataProvider
 from hanalpha.orchestrator import build_system
+from hanalpha.pit.catalog import PITCatalog
 from hanalpha.portfolio import Ledger
 from hanalpha.strategies import BreakoutStrategy
 
 app = typer.Typer(no_args_is_help=True, help="Han Alpha trading system CLI")
+pit_app = typer.Typer(no_args_is_help=True, help="Point-in-time fixture data tools")
+app.add_typer(pit_app, name="pit")
 console = Console()
+
+
+@pit_app.command("ingest-fixture")
+def pit_ingest_fixture(
+    fixture: Annotated[Path, typer.Option("--fixture", exists=True, file_okay=False)],
+    state: Annotated[Path, typer.Option("--state", file_okay=False)],
+) -> None:
+    """Verify, normalize, quality-gate, and publish a frozen local fixture."""
+    result = run_fixture_pipeline(fixture, state)
+    console.print(
+        f"snapshot_id={result.snapshot_id} feature_hash={result.feature_hash} "
+        f"records={result.record_count}"
+    )
+
+
+@pit_app.command("quality")
+def pit_quality(
+    state: Annotated[Path, typer.Option("--state", exists=True, file_okay=False)],
+    snapshot: Annotated[str, typer.Option("--snapshot")],
+) -> None:
+    """Show the stored quality decision for a snapshot."""
+    catalog = PITCatalog(state / "catalog.sqlite3")
+    try:
+        report = catalog.get_quality(snapshot)
+        if report is None:
+            raise typer.BadParameter("snapshot has no quality report")
+        console.print(
+            f"passed={report.passed} digest={report.digest} issues={len(report.issues)}"
+        )
+    finally:
+        catalog.close()
+
+
+@pit_app.command("snapshot")
+def pit_snapshot(
+    state: Annotated[Path, typer.Option("--state", exists=True, file_okay=False)],
+    snapshot: Annotated[str, typer.Option("--snapshot")],
+) -> None:
+    """Show a snapshot manifest, quality decision, and publication state."""
+    catalog = PITCatalog(state / "catalog.sqlite3")
+    try:
+        console.print_json(json.dumps(catalog.snapshot_document(snapshot), sort_keys=True))
+    finally:
+        catalog.close()
 
 
 @app.command()

@@ -21,11 +21,13 @@ dependencies = [
   "rich>=14,<15",
   "numpy>=2.2,<3",
   "python-dateutil>=2.9,<3",
+  "duckdb>=1.5,<2",
 ]
 
 [project.optional-dependencies]
 dev = [
   "hatchling>=1.27,<2",
+  "editables>=0.5,<1",
   "pip-tools>=7.5,<8",
   "pytest>=8.4,<9",
   "pytest-asyncio>=1.0,<2",

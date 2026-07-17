@@ -1,6 +1,6 @@
 # Han Alpha Trading System
 
-> M0 status (2026-07-18): complete and reproduced from the hash-locked dependency set in a clean Python 3.12 environment. M1 PIT may start as a local fixture-driven data-kernel milestone. External data, LLM and broker access remain separately gated. See `docs/v2-plan/07_M0_CLOSEOUT_AND_M1_DECISION_ZH.md`.
+> M1 status (2026-07-18): the local frozen-fixture PIT kernel is complete and reproduced from the hash-locked dependency set in a clean Python 3.12 environment. This is an engineering/data-validity result, not market-data validation or evidence of alpha. External data, LLM and broker access remain separately gated.
 
 A directly runnable, evidence-grounded trading research and IBKR paper-execution system.
 
@@ -19,6 +19,8 @@ The system is built around one rule: **LLMs may interpret evidence and veto trad
 - Append-only SQLite audit ledger.
 - FastAPI control plane and CLI.
 - Event-driven baseline backtester.
+- Immutable local PIT raw/catalog/Parquet snapshots with typed as-of queries.
+- Frozen synthetic symbology, delisting, revision, corporate-action and DST fixtures.
 - Unit, integration, and adversarial tests.
 
 ## Safety boundary
@@ -32,11 +34,12 @@ cd han-alpha
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install --require-hashes -r requirements-dev.lock
-pip install --no-deps -e .
+pip install --no-deps --no-build-isolation -e .
 cp .env.example .env
 hanalpha doctor
 hanalpha demo --cycles 10
 hanalpha backtest --symbol NVDA --bars 1000
+hanalpha pit ingest-fixture --fixture tests/pit/fixtures/v1 --state .state/pit
 pytest
 ```
 
@@ -82,6 +85,8 @@ Append-only ledger + API + monitoring
 hanalpha doctor
 hanalpha demo --cycles 20
 hanalpha backtest --symbol CRDO --bars 1500
+hanalpha pit quality --state .state/pit --snapshot <snapshot_id>
+hanalpha pit snapshot --state .state/pit --snapshot <snapshot_id>
 hanalpha serve --host 127.0.0.1 --port 8000
 pytest
 ruff check src tests

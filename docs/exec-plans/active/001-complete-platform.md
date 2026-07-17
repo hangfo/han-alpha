@@ -1,6 +1,6 @@
 # Active execution plan: complete Han Alpha platform
 
-Status: ACTIVE; M1 is next
+Status: ACTIVE; M2 is next
 Owner: Codex
 Last updated: 2026-07-18
 
@@ -21,7 +21,7 @@ Codex must rerun and replace these statements with current command evidence.
 ## Milestones
 
 - [x] M0 baseline freeze, capability safety and reproducible verification
-- [ ] M1 point-in-time data and persistent contracts
+- [x] M1 point-in-time data and persistent contracts
 - [ ] M2 portfolio backtest and experiment registry
 - [ ] M3 productionized IBKR Paper recovery/reconciliation
 - [ ] M4 evidence agents, caching, budgets, ablation
@@ -35,6 +35,7 @@ Record important decisions here with date, alternatives, and consequences. Do no
 
 - 2026-07-18: Accepted ADR 0001. Operating authority is capability-based; `live_auto` does not exist; API and paper auto writes are default-off.
 - 2026-07-18: M0 canonical verification passed twice, including a clean hash-locked Python 3.12 environment. M1 is GO for a local fixture-driven PIT data vertical slice, not UI or new agents.
+- 2026-07-18: M1 frozen-fixture PIT kernel passed local and clean hash-locked verification. Real vendor data remains gated; M2 is a local portfolio replay/experiment milestone.
 
 ## Verification log
 
@@ -49,4 +50,4 @@ For each milestone record:
 
 M0 evidence is maintained in `../completed/002-m0-baseline-safety.md` and `docs/VERIFICATION_REPORT.md`.
 
-The bounded next plan is `003-m1-pit-data-kernel.md`; its fixture contract is `docs/v2-plan/08_M1_FROZEN_FIXTURE_SPEC_ZH.md`.
+M1 evidence is maintained in `../completed/003-m1-pit-data-kernel.md`. The bounded next plan is `004-m2-portfolio-backtest.md`.

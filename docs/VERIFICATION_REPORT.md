@@ -116,3 +116,38 @@ Final results:
 The test run emits one upstream Starlette/FastAPI TestClient deprecation warning. It is non-fatal, not suppressed, and does not alter the M0 result. The earlier V0.1 32-test evidence remains historical; the 48-test result is the M0 baseline.
 
 M0 is VERIFIED. This authorizes local M1 PIT implementation only; it does not authorize vendor, LLM or broker access and does not establish alpha or production readiness.
+
+## M1 local PIT verification - 2026-07-18
+
+Implemented without vendor, LLM, IBKR or order access:
+
+- immutable content-addressed raw objects and source-revision conflict rejection;
+- SQLite staged/published manifest, lineage and quality catalog;
+- canonical Parquet snapshots written/read with DuckDB 1.5.4;
+- stable instrument IDs, half-open ticker/listing intervals, delisting and symbol reuse;
+- centralized typed `AsOfRepository` predicates for snapshot, availability, validity and visible revision;
+- raw-preserving split/dividend adjustment policies with snapshot and policy trace;
+- DST-safe exchange wall-time conversion plus deterministic frozen-fixture XNYS phase checks;
+- manifest-classified valid/invalid fixture files and deterministic snapshot/feature replay;
+- CLI fixture ingest, quality inspection and snapshot inspection.
+
+Canonical local result:
+
+- `scripts/preflight.sh`: PASS;
+- `scripts/verify_all.sh`: PASS;
+- Ruff: PASS;
+- mypy strict: PASS, 58 source files;
+- pytest: PASS, 76 tests;
+- branch-aware coverage: 77.41%, required threshold 70%;
+- sdist/wheel, doctor, three-cycle demo and 400-bar synthetic backtest: PASS;
+- repeated fixture ingest into the same state: PASS after an idempotency regression was found and fixed;
+- clean Python 3.12.13 environment installed only with `--require-hashes`: PASS after explicitly locking the editable-build dependency.
+
+Frozen fixture v1 evidence:
+
+- snapshot ID: `1741368ff587ab3b09a8c44c5353cf2a4c50a9aecbdc531457dbb93f83eafc76`;
+- feature hash: `56ede5afa4f3336613a6bdaf0fb2ab7432a0bc9029110219e9d2baa91e9df88a`;
+- quality digest: `5af0fe7f45a043afed563c06538174a5268fa86a5f7c37e5c207f39275f34321`;
+- records: 20; publication state: `published`; issues: 0.
+
+M1 is VERIFIED for the repository-owned synthetic fixture boundary. It does not prove production calendar completeness, vendor PIT correctness, strategy profitability, portfolio replay parity or broker readiness. M2 may start locally; real data remains separately gated.
