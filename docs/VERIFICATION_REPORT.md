@@ -81,3 +81,27 @@ baseline backtest smoke: PASS
 ```
 
 The 85% coverage target applies to the completed platform and is deliberately recorded as an acceptance criterion, not misrepresented as already achieved by V0.1.
+
+## M0 verification - 2026-07-18
+
+Baseline freeze:
+
+- V0.1 commit: `0a69b6892c1e6da184ce0fe6d376557ed8a0de82`;
+- V0.1 tree: `b7d7d35fdf53f701f856513c05bf5450be7e2640`;
+- M0 safety implementation: `43b77f4`.
+
+Passed without network, vendor, LLM or broker access:
+
+- `scripts/preflight.sh` with bundled Python 3.12.13: PASS;
+- `python3 -m compileall -q src tests`: PASS;
+- `git diff --check`: PASS;
+- direct offline M0 safety smoke: PASS for mode/capability denial, missing token denial, nonexistent `live_auto`, naive clock rejection and buy/sell limit semantics;
+- direct offline full synthetic `paper_manual` cycle: PASS with Broker write capability false.
+
+Canonical full verification is **BLOCKED, not passed**:
+
+- `scripts/verify_all.sh` stopped at `ruff: command not found`;
+- the available runtimes also lack the complete declared dev dependency set for full pytest, mypy and package build;
+- dependencies were not downloaded because this M0 run was explicitly local/no-network.
+
+Therefore the earlier V0.1 32-test/coverage evidence remains historical only. It must not be used as proof that the M0 diff is fully green. M1 remains gated on a fresh successful `scripts/verify_all.sh` run in a clean Python >=3.12 environment.

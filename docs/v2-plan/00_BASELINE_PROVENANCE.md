@@ -16,3 +16,15 @@ This file freezes what was reviewed before any V2 implementation work.
 
 The final prompt's material instructions and defects are recorded in `01_CONVERSATION_AND_PACKAGE_AUDIT_ZH.md`; the corrected replacement is `05_CODEX_GOAL_PROMPT_ZH.md`. The original prompt remains in the immutable source conversation and is intentionally not made an executable repo instruction.
 
+## V0.1 Git freeze
+
+The extracted, reviewed V0.1 tree was committed before M0 implementation:
+
+- baseline commit: `0a69b6892c1e6da184ce0fe6d376557ed8a0de82`;
+- baseline tree: `b7d7d35fdf53f701f856513c05bf5450be7e2640`;
+- tracked files: 110;
+- commit subject: `chore: import audited V0.1 baseline`;
+- complete human-readable package tree: root `PROJECT_TREE.txt`;
+- exact machine-readable file/content list: `git ls-tree -r 0a69b689`.
+
+The archive SHA identifies the downloaded source artifact; the Git commit and tree identify the exact normalized repository imported from it. M0 safety code begins in commit `43b77f4` and is not part of the frozen V0.1 baseline.

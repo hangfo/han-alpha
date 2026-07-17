@@ -1,5 +1,7 @@
 # Han Alpha Trading System
 
+> M0 status (2026-07-18): safety code is implemented, but canonical ruff/mypy/full-pytest/build verification is blocked by the missing local dev toolchain. M1 PIT implementation must not start until `./scripts/verify_all.sh` passes. See `docs/v2-plan/07_M0_CLOSEOUT_AND_M1_DECISION_ZH.md`.
+
 A directly runnable, evidence-grounded trading research and IBKR paper-execution system.
 
 The system is built around one rule: **LLMs may interpret evidence and veto trades, but deterministic code controls prices, position size, risk limits, order state, and broker access.**
