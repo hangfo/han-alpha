@@ -6,6 +6,7 @@ import pytest
 
 from hanalpha.experiments.models import ArtifactDigest, ExperimentManifest, TrialStatus
 from hanalpha.experiments.registry import ExperimentRegistry, IllegalTrialTransition
+from hanalpha.research.promotion import PromotionEvidence, PromotionThresholds
 
 
 def _manifest(**updates) -> ExperimentManifest:
@@ -111,5 +112,58 @@ def test_artifacts_are_hash_registered_and_conflicts_fail_closed(tmp_path) -> No
                 relative_path="runs/result.json",
                 at=now + timedelta(seconds=2),
             )
+    finally:
+        registry.close()
+
+
+def _promotion_evidence(**updates) -> PromotionEvidence:
+    payload = {
+        "protocol_hash": "p" * 64,
+        "expected_protocol_hash": "p" * 64,
+        "observations": 504,
+        "oos_return_after_costs": "0.08",
+        "deflated_sharpe_probability": "0.98",
+        "pbo": "0.10",
+        "max_drawdown": "0.12",
+        "cost_stress_return": "0.02",
+        "largest_instrument_contribution": "0.20",
+        "parameter_stable": True,
+        "artifacts_verified": True,
+        "reproducible": True,
+        "independent_approved": True,
+    }
+    payload.update(updates)
+    return PromotionEvidence.model_validate(payload)
+
+
+def test_completed_trial_requires_explicit_promotion_gate(tmp_path) -> None:
+    registry = ExperimentRegistry(tmp_path / "experiments.sqlite3")
+    now = datetime(2024, 1, 1, tzinfo=UTC)
+    manifest = _manifest()
+    try:
+        registry.register(manifest, at=now)
+        registry.transition(manifest.experiment_id, TrialStatus.RUNNING, at=now)
+        registry.transition(
+            manifest.experiment_id,
+            TrialStatus.COMPLETED,
+            at=now,
+            result_hash="a" * 64,
+        )
+        with pytest.raises(IllegalTrialTransition):
+            registry.transition(manifest.experiment_id, TrialStatus.PROMOTED, at=now)
+        with pytest.raises(IllegalTrialTransition, match="pbo_gate"):
+            registry.promote(
+                manifest.experiment_id,
+                evidence=_promotion_evidence(pbo=None),
+                thresholds=PromotionThresholds(),
+                at=now,
+            )
+        registry.promote(
+            manifest.experiment_id,
+            evidence=_promotion_evidence(),
+            thresholds=PromotionThresholds(),
+            at=now,
+        )
+        assert registry.history(manifest.experiment_id)[-1].status == TrialStatus.PROMOTED
     finally:
         registry.close()

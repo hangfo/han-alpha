@@ -13,6 +13,11 @@ from hanalpha.experiments.models import (
     TrialStatus,
     TrialView,
 )
+from hanalpha.research.promotion import (
+    PromotionEvidence,
+    PromotionThresholds,
+    promotion_failures,
+)
 
 
 class IllegalTrialTransition(RuntimeError):
@@ -26,7 +31,7 @@ _ALLOWED: dict[TrialStatus, set[TrialStatus]] = {
         TrialStatus.FAILED,
         TrialStatus.ABORTED,
     },
-    TrialStatus.COMPLETED: {TrialStatus.PROMOTED},
+    TrialStatus.COMPLETED: set(),
     TrialStatus.FAILED: set(),
     TrialStatus.ABORTED: set(),
     TrialStatus.PROMOTED: set(),
@@ -145,6 +150,39 @@ class ExperimentRegistry:
                 result_hash=event.result_hash,
                 failure_reason=event.failure_reason,
                 metadata=event.metadata,
+            )
+
+    def promote(
+        self,
+        experiment_id: str,
+        *,
+        evidence: PromotionEvidence,
+        thresholds: PromotionThresholds,
+        at: datetime,
+    ) -> None:
+        """Promote only through the explicit statistical and human review gate."""
+        history = self.history(experiment_id)
+        if not history:
+            raise KeyError(experiment_id)
+        current = history[-1]
+        if current.status != TrialStatus.COMPLETED:
+            raise IllegalTrialTransition(f"{current.status} -> {TrialStatus.PROMOTED}")
+        if at < current.occurred_at:
+            raise IllegalTrialTransition("trial events must be monotonic")
+        failures = promotion_failures(evidence, thresholds)
+        if failures:
+            raise IllegalTrialTransition("promotion rejected: " + ", ".join(failures))
+        with self.connection:
+            self._append(
+                experiment_id,
+                TrialStatus.PROMOTED,
+                at=at,
+                result_hash=current.result_hash,
+                failure_reason=None,
+                metadata={
+                    "promotion_evidence": evidence.model_dump(mode="json"),
+                    "promotion_thresholds": thresholds.model_dump(mode="json"),
+                },
             )
 
     def record_artifact(

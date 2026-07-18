@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Annotated
 
@@ -15,9 +17,18 @@ from hanalpha.backtest import BacktestEngine
 from hanalpha.config import load_config
 from hanalpha.data.fixtures import run_fixture_pipeline
 from hanalpha.data.synthetic import SyntheticMarketDataProvider
+from hanalpha.experiments.models import ExperimentManifest
+from hanalpha.experiments.registry import ExperimentRegistry
+from hanalpha.experiments.runner import ExperimentRunner
 from hanalpha.orchestrator import build_system
 from hanalpha.pit.catalog import PITCatalog
 from hanalpha.portfolio import Ledger
+from hanalpha.research.adapter import ResearchPolicyAdapter
+from hanalpha.research.strategies import SlowTrendStrategy
+from hanalpha.simulation.engine import PortfolioReplayEngine
+from hanalpha.simulation.events import ReplayFrame, SimulationBar, canonical_hash
+from hanalpha.simulation.fills import FillPolicy, HistoricalExchange
+from hanalpha.simulation.portfolio import PortfolioPolicy
 from hanalpha.strategies import BreakoutStrategy
 
 app = typer.Typer(no_args_is_help=True, help="Han Alpha trading system CLI")
@@ -50,9 +61,7 @@ def pit_quality(
         report = catalog.get_quality(snapshot)
         if report is None:
             raise typer.BadParameter("snapshot has no quality report")
-        console.print(
-            f"passed={report.passed} digest={report.digest} issues={len(report.issues)}"
-        )
+        console.print(f"passed={report.passed} digest={report.digest} issues={len(report.issues)}")
     finally:
         catalog.close()
 
@@ -134,9 +143,113 @@ def demo(
 def backtest(
     symbol: str = "NVDA",
     bars: Annotated[int, typer.Option(min=200, max=5000)] = 1000,
+    state: Annotated[Path, typer.Option("--state", file_okay=False)] = Path(".state/research"),
     config_path: Annotated[str | None, typer.Option("--config")] = None,
 ) -> None:
-    """Run a repeatable synthetic no-look-ahead baseline backtest."""
+    """Run the deterministic M3 replay and register a reproducible result bundle."""
+
+    async def _run() -> None:
+        config, _ = load_config(config_path)
+        provider = SyntheticMarketDataProvider(config.bar_interval_minutes)
+        symbol_bars = await provider.get_bars(symbol, bars)
+        fixed_start = datetime(2020, 1, 1, tzinfo=UTC)
+        normalized = [
+            bar.model_copy(
+                update={
+                    "timestamp": fixed_start
+                    + timedelta(minutes=index * config.bar_interval_minutes)
+                }
+            )
+            for index, bar in enumerate(symbol_bars)
+        ]
+        snapshot_id = canonical_hash(
+            {
+                "provider": "synthetic-v1",
+                "seed": provider.seed,
+                "symbol": symbol,
+                "bars": [bar.model_dump(mode="json") for bar in normalized],
+            }
+        )
+        frames = [
+            ReplayFrame(
+                snapshot_id=snapshot_id,
+                as_of=bar.timestamp,
+                bars=[
+                    SimulationBar(
+                        snapshot_id=snapshot_id,
+                        instrument_id=symbol,
+                        source_record_id=f"synthetic:{symbol}:{index}",
+                        source_revision=1,
+                        event_time=bar.timestamp,
+                        available_at=bar.timestamp,
+                        open=bar.open,
+                        high=bar.high,
+                        low=bar.low,
+                        close=bar.close,
+                        volume=bar.volume,
+                    )
+                ],
+            )
+            for index, bar in enumerate(normalized)
+        ]
+        fill_policy = FillPolicy()
+        portfolio_policy = PortfolioPolicy()
+        engine_config_hash = canonical_hash(
+            {
+                "starting_cash": "100000",
+                "portfolio_policy": portfolio_policy,
+                "fill_policy": fill_policy,
+            }
+        )
+        engine = PortfolioReplayEngine(
+            starting_cash=Decimal("100000"),
+            portfolio_policy=portfolio_policy,
+            exchange=HistoricalExchange(fill_policy),
+            config_hash=engine_config_hash,
+        )
+        strategy = SlowTrendStrategy(fast_window=50, slow_window=200, quantity=10)
+        policy = ResearchPolicyAdapter(strategy)
+        manifest = ExperimentManifest(
+            snapshot_id=snapshot_id,
+            code_hash=canonical_hash({"package": "han-alpha", "m3_schema": "1"}),
+            config_hash=engine_config_hash,
+            cost_policy_hash=fill_policy.policy_hash,
+            universe_hash=canonical_hash([symbol]),
+            metric_schema_version="2",
+            seed=provider.seed,
+            strategy_id=policy.name,
+            strategy_version=policy.version,
+            hypothesis="synthetic trend baseline validates mechanics; it is not alpha evidence",
+            parameters={"fast_window": 50, "slow_window": 200, "quantity": 10},
+        )
+        registry = ExperimentRegistry(state / "experiments.sqlite3")
+        try:
+            result = ExperimentRunner(registry, state / "artifacts").run(
+                manifest=manifest,
+                engine=engine,
+                frames=frames,
+                policy=policy,
+                at=frames[-1].as_of,
+            )
+        finally:
+            registry.close()
+        console.print_json(result.metrics.model_dump_json(indent=2))
+        console.print(f"fills={result.fill_count} result_hash={result.result_hash}")
+        console.print(
+            f"experiment_id={result.experiment_id} "
+            f"artifacts={state / 'artifacts' / result.experiment_id}"
+        )
+
+    asyncio.run(_run())
+
+
+@app.command("legacy-backtest", hidden=True)
+def legacy_backtest(
+    symbol: str = "NVDA",
+    bars: Annotated[int, typer.Option(min=200, max=5000)] = 1000,
+    config_path: Annotated[str | None, typer.Option("--config")] = None,
+) -> None:
+    """Run the frozen M0 verifier retained only for backward comparison."""
 
     async def _run() -> None:
         config, _ = load_config(config_path)
@@ -144,8 +257,7 @@ def backtest(
         symbol_bars = await provider.get_bars(symbol, bars)
         benchmark_bars = await provider.get_bars(config.benchmarks["market"], bars)
         strategy = BreakoutStrategy(config.strategies["breakout"])
-        engine = BacktestEngine(starting_cash=100_000)
-        metrics, trades = engine.run(
+        metrics, trades = BacktestEngine(starting_cash=100_000).run(
             symbol=symbol,
             bars=symbol_bars,
             benchmark_bars=benchmark_bars,

@@ -66,10 +66,12 @@ warn_unused_ignores = true
 [tool.coverage.run]
 source = ["hanalpha"]
 branch = true
+omit = ["src/hanalpha/execution/ibkr.py"]
 
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
+fail_under = 85
 
 [[tool.mypy.overrides]]
 module = "ibapi.*"

@@ -4,6 +4,7 @@ import hashlib
 import json
 from datetime import datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -68,6 +69,14 @@ class SimulationBar(BaseModel):
         )
 
 
+class CorporateActionPhase(StrEnum):
+    ANNOUNCED = "announced"
+    EX_DATE = "ex_date"
+    RECORD_DATE = "record_date"
+    PAYABLE = "payable"
+    EFFECTIVE = "effective"
+
+
 class SimulationCorporateAction(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -77,10 +86,17 @@ class SimulationCorporateAction(BaseModel):
     source_record_id: str
     source_revision: int = Field(ge=1)
     action_type: CorporateActionType
+    phase: CorporateActionPhase = CorporateActionPhase.EFFECTIVE
     event_time: datetime
     available_at: datetime
     ratio: Decimal | None = None
     cash_amount: Decimal | None = None
+
+    @model_validator(mode="after")
+    def validate_action(self) -> SimulationCorporateAction:
+        require_aware(self.event_time, "event_time")
+        require_aware(self.available_at, "available_at")
+        return self
 
     @classmethod
     def from_record(cls, record: CorporateActionRecord) -> SimulationCorporateAction:
@@ -106,17 +122,19 @@ class ReplayFrame(BaseModel):
     snapshot_id: str = Field(pattern=HASH_PATTERN)
     as_of: datetime
     bars: list[SimulationBar]
+    bar_revisions: list[SimulationBar] = Field(default_factory=list)
     actions: list[SimulationCorporateAction] = Field(default_factory=list)
+    action_revisions: list[SimulationCorporateAction] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_frame(self) -> ReplayFrame:
         require_aware(self.as_of, "as_of")
-        for bar in self.bars:
+        for bar in [*self.bars, *self.bar_revisions]:
             if bar.snapshot_id != self.snapshot_id:
                 raise ValueError("frame contains a different snapshot")
             if bar.available_at > self.as_of:
                 raise ValueError("frame contains information unavailable at as_of")
-        for action in self.actions:
+        for action in [*self.actions, *self.action_revisions]:
             if action.snapshot_id != self.snapshot_id:
                 raise ValueError("frame contains a different snapshot")
             if action.available_at > self.as_of:

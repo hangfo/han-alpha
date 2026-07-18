@@ -187,3 +187,32 @@ mechanics boundary. It does not validate real vendor timestamps, queue/depth or
 auction behavior, sector PIT data, strategy alpha, IBKR Paper or live execution.
 M3 may proceed to preregistration and strategy-evidence design; any real data
 acquisition remains separately permission-gated.
+
+## M3 preregistered strategy evidence verification - 2026-07-18
+
+Implemented locally without vendor, LLM, IBKR or order access:
+
+- separate knowledge-only revisions from tradable bars/actions, including explicit corporate-action phases;
+- stable content-addressed candidates, next-event matching and executable partial-fill stop/target OCO protection;
+- balanced debit/credit monetary journals with FIFO lots retained as an operational view;
+- immutable point-in-time research contexts and momentum, slow-trend and PIT-expectation-gated PEAD baselines;
+- frozen research windows, parameter ranges, success criteria and trial budgets;
+- purge/embargo walk-forward, time-weighted metrics, bootstrap intervals, Deflated Sharpe, CSCV PBO and Holm correction;
+- budgeted doubled-cost, delayed-execution and parameter-perturbation counterfactual manifests plus rejected-decision outcomes;
+- dedicated fail-closed promotion review requiring complete statistical, risk, robustness, reproducibility, artifact and independent-human evidence;
+- idempotent `hanalpha backtest` registration and immutable artifacts; the old verifier is explicitly `legacy-backtest`.
+
+Canonical local result:
+
+- `scripts/preflight.sh`: PASS on Python 3.12.13;
+- `scripts/verify_all.sh`: PASS;
+- Ruff: PASS;
+- mypy strict: PASS, 82 source files;
+- pytest: PASS, 133 tests;
+- branch-aware coverage: 85.48%, required threshold 85%;
+- sdist/wheel build, doctor, three-cycle demo and 400-bar registered backtest: PASS;
+- `git diff --check`: PASS.
+
+The local coverage denominator explicitly omits `execution/ibkr.py`, whose real callback/reconciliation behavior is credential-gated M6 scope. Its capability and no-live-auto boundaries remain tested and unchanged. The existing upstream Starlette/FastAPI TestClient deprecation warning remains non-fatal.
+
+M3 is VERIFIED for local research and replay mechanics. Real Alpha evidence remains BLOCKED on licensed point-in-time data, timestamp and universe review, PIT earnings expectations, and a complete corporate-action entitlement/payment contract. Synthetic annualized metrics are not decision evidence. M4 may add evidence-only LLM assistance; LLMs still cannot size, change risk, promote experiments, or access a Broker.

@@ -42,6 +42,15 @@ class ExperimentRunner:
     ) -> ExperimentResult:
         self._validate_contract(manifest, engine, frames, policy)
         experiment_id = self.registry.register(manifest, at=at)
+        history = self.registry.history(experiment_id)
+        if history[-1].status in {TrialStatus.COMPLETED, TrialStatus.PROMOTED}:
+            result_path = self.artifact_root / experiment_id / "result.json"
+            if not result_path.is_file():
+                raise ExperimentContractError("completed experiment is missing result artifact")
+            result = ExperimentResult.model_validate_json(result_path.read_text())
+            if result.result_hash != history[-1].result_hash:
+                raise ExperimentContractError("completed experiment result hash mismatch")
+            return result
         self.registry.transition(
             experiment_id,
             TrialStatus.RUNNING,

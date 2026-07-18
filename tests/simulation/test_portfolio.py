@@ -10,6 +10,7 @@ from hanalpha.simulation.events import FillEvent
 from hanalpha.simulation.orders import OrderIntent, OrderKind
 from hanalpha.simulation.portfolio import (
     DuplicateLedgerEvent,
+    JournalAccount,
     PortfolioLedger,
     PortfolioPolicy,
     ReservationRejected,
@@ -73,6 +74,8 @@ def test_cash_lots_fifo_and_commissions_reconcile(buy_order, simulation_time) ->
     ledger.release("order-sell-1")
     assert ledger.realized_pnl == Decimal("498")
     assert ledger.position_quantity("inst-alpha") == 50
+    assert all(entry.is_balanced for entry in ledger.journal_entries)
+    assert ledger.account_balance(JournalAccount.CASH) == ledger.cash
     ledger.assert_conservation()
 
 
@@ -163,6 +166,8 @@ def test_split_and_dividend_are_explicit_conserving_events(buy_order, simulation
         at=simulation_time,
     )
     assert ledger.cash == raw_cash + Decimal("200")
+    assert ledger.journal_entries[-1].reason == "cash_dividend"
+    assert ledger.journal_entries[-1].is_balanced
     ledger.assert_conservation()
 
 
@@ -187,4 +192,5 @@ def test_delisting_explicitly_closes_lots_at_declared_recovery(buy_order, simula
     assert ledger.realized_pnl == Decimal("-9001")
     assert ledger.cash == Decimal("10999")
     assert ledger.cash_entries[-1].reason == "delisting_recovery"
+    assert ledger.journal_entries[-1].is_balanced
     ledger.assert_conservation()

@@ -1,6 +1,6 @@
 # Han Alpha Trading System
 
-> M2 status (2026-07-18): deterministic local portfolio replay and the experiment lifecycle are complete and reproduced from the hash-locked dependency set in a clean Python 3.12 environment. This validates engineering mechanics only—not market-data semantics, venue fidelity, capacity or alpha. External data, LLM and broker access remain separately gated.
+> M3 status (2026-07-18): deterministic replay truth, preregistered strategy evidence, statistical rejection gates, promotion governance and the registered default backtest are complete. This validates engineering mechanics only—not market-data semantics, venue fidelity, capacity or alpha. External data, LLM and broker access remain separately gated.
 
 A directly runnable, evidence-grounded trading research and IBKR paper-execution system.
 
@@ -23,6 +23,7 @@ The system is built around one rule: **LLMs may interpret evidence and veto trad
 - Frozen synthetic symbology, delisting, revision, corporate-action and DST fixtures.
 - Deterministic PIT portfolio replay with shared cash/risk reservations, explicit orders/fills, corporate actions and parity hashes.
 - Canonical experiment manifests, failed-trial cemetery and immutable JSON/HTML result artifacts.
+- Point-in-time research contexts, interpretable baselines, walk-forward diagnostics, bounded counterfactuals and fail-closed promotion review.
 - Unit, integration, and adversarial tests.
 
 ## Safety boundary
@@ -116,3 +117,10 @@ This repository includes a complete Codex task package. Start with `CODEX_START_
 - `docs/IBKR_PAPER_RUNBOOK.md`
 - `docs/ROADMAP.md`
 - `docs/VERIFICATION_REPORT.md`
+### Deterministic research backtest
+
+```bash
+hanalpha backtest --symbol NVDA --bars 400 --state .state/research
+```
+
+This command uses the portfolio replay and append-only experiment registry and writes immutable `manifest.json`, `result.json`, and `report.html` artifacts. Its built-in data is synthetic and validates mechanics only; it is not Alpha evidence. The pre-M2 verifier remains available as the hidden `legacy-backtest` compatibility command.

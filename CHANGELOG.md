@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased - M3 preregistered strategy evidence (2026-07-18)
+
+### Added
+
+- Immutable point-in-time research contexts and interpretable momentum, slow-trend and typed PEAD falsification baselines.
+- Pre-registered train/validation/test windows, fixed parameter ranges, research budgets, purge/embargo walk-forward folds and budgeted cost/delay/parameter counterfactual manifests.
+- Time-weighted portfolio/risk metrics, bootstrap intervals, Deflated Sharpe, CSCV Probability of Backtest Overfitting and Holm multiple-testing correction with fail-closed sample checks.
+- Explicit statistical/risk/reproducibility/manual promotion gate and counterfactual outcomes for rejected decisions.
+- True balanced journal entries for capital, trades, commissions and corporate actions.
+
+### Fixed
+
+- Historical data revisions can update research knowledge but can no longer create ghost fills; corporate-action revisions cannot duplicate cash or position effects.
+- Candidate permutation is deterministic and duplicate candidates fail closed.
+- Partial entry fills now create executable reduce-only stop/target OCO children; conservative stop-first matching prevents double exits.
+- Re-running a completed deterministic experiment returns its verified immutable result instead of attempting an illegal lifecycle transition.
+
+### Changed
+
+- `hanalpha backtest` now uses portfolio replay plus the experiment registry and emits a deterministic artifact bundle; the former verifier is `legacy-backtest`.
+- Backend branch coverage enforcement is raised to 85%; the credential-gated live IBKR adapter remains M6 integration scope and is explicitly excluded from the local denominator.
+
+### Verification and safety
+
+- Ruff, strict mypy, package build, CLI/API smoke, adversarial and full regression checks pass at 85%+ branch coverage.
+- No vendor, LLM, IBKR or order call was made. Synthetic results validate mechanics only and are not evidence of profitability.
+
 ## Unreleased - M2 deterministic portfolio replay (2026-07-18)
 
 ### Added

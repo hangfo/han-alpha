@@ -51,6 +51,10 @@ class OrderIntent(BaseModel):
     limit_price: float | None = Field(default=None, gt=0)
     stop_price: float | None = Field(default=None, gt=0)
     protective_stop: float | None = Field(default=None, gt=0)
+    protective_target: float | None = Field(default=None, gt=0)
+    parent_order_id: str | None = None
+    oco_group_id: str | None = None
+    reduce_only: bool = False
 
     @model_validator(mode="after")
     def validate_intent(self) -> OrderIntent:
@@ -72,6 +76,14 @@ class OrderIntent(BaseModel):
             and self.protective_stop >= self.planned_price
         ):
             raise ValueError("buy protective_stop must be below planned_price")
+        if (
+            self.side == Side.BUY
+            and self.protective_target is not None
+            and self.protective_target <= self.planned_price
+        ):
+            raise ValueError("buy protective_target must be above planned_price")
+        if self.reduce_only and self.side != Side.SELL:
+            raise ValueError("long-only reduce_only orders must sell")
         return self
 
 

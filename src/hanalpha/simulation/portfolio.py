@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from hanalpha.domain.enums import Side
 from hanalpha.pit.models import require_aware
@@ -22,6 +23,57 @@ class ReservationRejected(RuntimeError):
 
 class DuplicateLedgerEvent(RuntimeError):
     pass
+
+
+class JournalAccount(StrEnum):
+    CASH = "cash"
+    OPENING_EQUITY = "opening_equity"
+    POSITIONS_AT_COST = "positions_at_cost"
+    COMMISSION_EXPENSE = "commission_expense"
+    REALIZED_PNL = "realized_pnl"
+    DIVIDEND_INCOME = "dividend_income"
+
+
+class JournalLine(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account: JournalAccount
+    debit: Decimal = Field(default=Decimal("0"), ge=0)
+    credit: Decimal = Field(default=Decimal("0"), ge=0)
+
+    @model_validator(mode="after")
+    def validate_sides(self) -> JournalLine:
+        if self.debit > 0 and self.credit > 0:
+            raise ValueError("journal line cannot debit and credit simultaneously")
+        return self
+
+
+class JournalEntry(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    event_id: str
+    at: datetime
+    reason: str
+    lines: tuple[JournalLine, ...]
+
+    @property
+    def total_debits(self) -> Decimal:
+        return sum((line.debit for line in self.lines), Decimal("0"))
+
+    @property
+    def total_credits(self) -> Decimal:
+        return sum((line.credit for line in self.lines), Decimal("0"))
+
+    @property
+    def is_balanced(self) -> bool:
+        return self.total_debits == self.total_credits
+
+    @model_validator(mode="after")
+    def validate_entry(self) -> JournalEntry:
+        require_aware(self.at, "at")
+        if not self.is_balanced:
+            raise ValueError("journal entry debits and credits must balance")
+        return self
 
 
 class PortfolioPolicy(BaseModel):
@@ -95,6 +147,7 @@ class _Reservation:
     remaining_quantity: Decimal
     risk_amount: Decimal
     risk_per_share: Decimal
+    oco_group_id: str | None
 
 
 class PortfolioLedger:
@@ -107,6 +160,7 @@ class PortfolioLedger:
         self.realized_pnl = Decimal("0")
         self.commissions = Decimal("0")
         self.cash_entries: list[CashEntry] = []
+        self.journal_entries: list[JournalEntry] = []
         self.lots: list[PositionLot] = []
         self.marks: dict[str, Decimal] = {}
         self._reservations: dict[str, _Reservation] = {}
@@ -118,6 +172,15 @@ class PortfolioLedger:
             reason="initial_capital",
             reference_id="initial",
             mutate_cash=False,
+        )
+        self._append_journal(
+            event_id="initial-capital",
+            at=datetime.min.replace(tzinfo=UTC),
+            reason="initial_capital",
+            lines=(
+                JournalLine(account=JournalAccount.CASH, debit=starting_cash),
+                JournalLine(account=JournalAccount.OPENING_EQUITY, credit=starting_cash),
+            ),
         )
 
     @property
@@ -193,15 +256,25 @@ class PortfolioLedger:
             reserved_quantity = Decimal("0")
         else:
             reserved_quantity = quantity
-            available_quantity = self.position_quantity(intent.instrument_id) - sum(
-                (
-                    item.remaining_quantity
-                    for item in self._reservations.values()
-                    if item.instrument_id == intent.instrument_id and item.side == Side.SELL
-                ),
-                Decimal("0"),
+            already_reserved = self._reserved_sell_quantity(intent.instrument_id)
+            same_group = Decimal("0")
+            if intent.oco_group_id is not None:
+                same_group = max(
+                    (
+                        item.remaining_quantity
+                        for item in self._reservations.values()
+                        if item.instrument_id == intent.instrument_id
+                        and item.side == Side.SELL
+                        and item.oco_group_id == intent.oco_group_id
+                    ),
+                    default=Decimal("0"),
+                )
+            incremental = (
+                quantity
+                if intent.oco_group_id is None
+                else max(Decimal("0"), quantity - same_group)
             )
-            if quantity > available_quantity:
+            if already_reserved + incremental > self.position_quantity(intent.instrument_id):
                 raise ReservationRejected("insufficient position")
             required_cash = Decimal("0")
         self._reservations[intent.order_id] = _Reservation(
@@ -213,6 +286,7 @@ class PortfolioLedger:
             remaining_quantity=reserved_quantity,
             risk_amount=risk,
             risk_per_share=risk_per_share,
+            oco_group_id=intent.oco_group_id,
         )
 
     def release(self, order_id: str) -> None:
@@ -238,6 +312,15 @@ class PortfolioLedger:
                 amount=-cost,
                 reason="buy_fill",
                 reference_id=fill.order_id,
+            )
+            self._append_journal(
+                event_id=fill.fill_id,
+                at=fill.occurred_at,
+                reason="buy_fill",
+                lines=(
+                    JournalLine(account=JournalAccount.POSITIONS_AT_COST, debit=cost),
+                    JournalLine(account=JournalAccount.CASH, credit=cost),
+                ),
             )
             unit_cost = cost / Decimal(fill.quantity)
             self.lots.append(
@@ -265,6 +348,26 @@ class PortfolioLedger:
                 amount=proceeds,
                 reason="sell_fill",
                 reference_id=fill.order_id,
+            )
+            gross_pnl = notional - cost_basis
+            journal_lines = [
+                JournalLine(account=JournalAccount.CASH, debit=proceeds),
+                JournalLine(account=JournalAccount.COMMISSION_EXPENSE, debit=commission),
+                JournalLine(account=JournalAccount.POSITIONS_AT_COST, credit=cost_basis),
+            ]
+            if gross_pnl >= 0:
+                journal_lines.append(
+                    JournalLine(account=JournalAccount.REALIZED_PNL, credit=gross_pnl)
+                )
+            else:
+                journal_lines.append(
+                    JournalLine(account=JournalAccount.REALIZED_PNL, debit=-gross_pnl)
+                )
+            self._append_journal(
+                event_id=fill.fill_id,
+                at=fill.occurred_at,
+                reason="sell_fill",
+                lines=tuple(journal_lines),
             )
             self.realized_pnl += proceeds - cost_basis
             reservation.remaining_quantity -= Decimal(fill.quantity)
@@ -312,6 +415,12 @@ class PortfolioLedger:
         self.lots = updated
         if instrument_id in self.marks:
             self.marks[instrument_id] /= ratio
+        self._append_journal(
+            event_id=action_id,
+            at=at,
+            reason="split_quantity_restatement",
+            lines=(),
+        )
         self._event_ids.add(action_id)
 
     def apply_dividend(
@@ -333,6 +442,15 @@ class PortfolioLedger:
             amount=amount,
             reason="cash_dividend",
             reference_id=instrument_id,
+        )
+        self._append_journal(
+            event_id=action_id,
+            at=at,
+            reason="cash_dividend",
+            lines=(
+                JournalLine(account=JournalAccount.CASH, debit=amount),
+                JournalLine(account=JournalAccount.DIVIDEND_INCOME, credit=amount),
+            ),
         )
         self._event_ids.add(action_id)
 
@@ -371,6 +489,21 @@ class PortfolioLedger:
             amount=recovery,
             reason="delisting_recovery",
             reference_id=instrument_id,
+        )
+        gross_pnl = recovery - cost_basis
+        journal_lines = [
+            JournalLine(account=JournalAccount.CASH, debit=recovery),
+            JournalLine(account=JournalAccount.POSITIONS_AT_COST, credit=cost_basis),
+        ]
+        if gross_pnl >= 0:
+            journal_lines.append(JournalLine(account=JournalAccount.REALIZED_PNL, credit=gross_pnl))
+        else:
+            journal_lines.append(JournalLine(account=JournalAccount.REALIZED_PNL, debit=-gross_pnl))
+        self._append_journal(
+            event_id=action_id,
+            at=at,
+            reason="delisting_recovery",
+            lines=tuple(journal_lines),
         )
         self.realized_pnl += recovery - cost_basis
         self.marks.pop(instrument_id, None)
@@ -423,6 +556,21 @@ class PortfolioLedger:
             raise AssertionError(f"cash ledger mismatch: cash={self.cash} entries={expected}")
         if any(lot.remaining_quantity < 0 for lot in self.lots):
             raise AssertionError("negative lot quantity")
+        if any(not entry.is_balanced for entry in self.journal_entries):
+            raise AssertionError("unbalanced journal entry")
+        if self.account_balance(JournalAccount.CASH) != self.cash:
+            raise AssertionError("journal cash account does not match portfolio cash")
+
+    def account_balance(self, account: JournalAccount) -> Decimal:
+        return sum(
+            (
+                line.debit - line.credit
+                for entry in self.journal_entries
+                for line in entry.lines
+                if line.account == account
+            ),
+            Decimal("0"),
+        )
 
     def _append_cash(
         self,
@@ -446,6 +594,20 @@ class PortfolioLedger:
         )
         if mutate_cash:
             self.cash += amount
+
+    def _append_journal(
+        self,
+        *,
+        event_id: str,
+        at: datetime,
+        reason: str,
+        lines: tuple[JournalLine, ...],
+    ) -> None:
+        if any(entry.event_id == event_id for entry in self.journal_entries):
+            raise DuplicateLedgerEvent(event_id)
+        self.journal_entries.append(
+            JournalEntry(event_id=event_id, at=at, reason=reason, lines=lines)
+        )
 
     def _consume_fifo(self, instrument_id: str, quantity: Decimal) -> Decimal:
         remaining = quantity
@@ -473,3 +635,12 @@ class PortfolioLedger:
     def _require_no_reservations(self, instrument_id: str) -> None:
         if any(item.instrument_id == instrument_id for item in self._reservations.values()):
             raise ReservationRejected("corporate action requires released orders")
+
+    def _reserved_sell_quantity(self, instrument_id: str) -> Decimal:
+        groups: dict[str, Decimal] = {}
+        for item in self._reservations.values():
+            if item.instrument_id != instrument_id or item.side != Side.SELL:
+                continue
+            key = item.oco_group_id or item.order_id
+            groups[key] = max(groups.get(key, Decimal("0")), item.remaining_quantity)
+        return sum(groups.values(), Decimal("0"))

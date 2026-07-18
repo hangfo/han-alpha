@@ -64,6 +64,8 @@ class HistoricalExchange:
         intent = order.intent
         if bar.instrument_id != intent.instrument_id:
             return None
+        if bar.source_revision != 1 or bar.event_time < intent.submitted_at:
+            return None
         if bar.available_at > as_of or bar.available_at <= intent.submitted_at:
             return None
         if bar.available_at < intent.earliest_fill_at:

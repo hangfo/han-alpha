@@ -99,3 +99,16 @@ def test_same_decision_bar_halt_and_zero_volume_do_not_fill(buy_order, simulatio
 def test_future_unavailable_bar_is_rejected(buy_order, simulation_bar) -> None:
     as_of = simulation_bar.available_at - timedelta(seconds=1)
     assert HistoricalExchange(FillPolicy()).match(buy_order, simulation_bar, as_of=as_of) is None
+
+
+def test_historical_revision_is_knowledge_only_and_never_fills(buy_order, simulation_bar) -> None:
+    revision = simulation_bar.model_copy(
+        update={
+            "source_revision": 2,
+            "available_at": simulation_bar.available_at + timedelta(days=1),
+        }
+    )
+    assert (
+        HistoricalExchange(FillPolicy()).match(buy_order, revision, as_of=revision.available_at)
+        is None
+    )

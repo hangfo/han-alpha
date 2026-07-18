@@ -80,3 +80,33 @@ def test_result_bundle_refuses_to_overwrite_different_content(tmp_path) -> None:
             result.model_copy(update={"event_hash": "8" * 64}),
             directory,
         )
+
+
+def test_metrics_are_time_weighted_and_require_strict_time() -> None:
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    points = [
+        EquityPoint(
+            as_of=start,
+            net_liquidation=Decimal("100"),
+            cash=Decimal("100"),
+            gross_exposure=Decimal("1"),
+        ),
+        EquityPoint(
+            as_of=start + timedelta(hours=1),
+            net_liquidation=Decimal("90"),
+            cash=Decimal("90"),
+            gross_exposure=Decimal("0"),
+        ),
+        EquityPoint(
+            as_of=start + timedelta(hours=4),
+            net_liquidation=Decimal("95"),
+            cash=Decimal("95"),
+            gross_exposure=Decimal("0"),
+        ),
+    ]
+    metrics = compute_portfolio_metrics(points, total_traded_notional=Decimal("0"))
+    assert metrics.time_weighted_exposure_ratio == Decimal("0.25")
+    assert metrics.time_under_water == Decimal("0.75")
+    assert metrics.expected_shortfall_95 is not None
+    with pytest.raises(ValueError, match="strictly"):
+        compute_portfolio_metrics([points[0], points[0]], total_traded_notional=Decimal("0"))
