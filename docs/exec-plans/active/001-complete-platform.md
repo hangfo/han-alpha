@@ -57,4 +57,4 @@ M1 evidence is maintained in `../completed/003-m1-pit-data-kernel.md`.
 
 M2 evidence is maintained in `../completed/004-m2-portfolio-backtest.md`.
 
-M3 evidence is maintained in `005-m3-strategy-evidence.md`. The next bounded milestone is M4 LLM Evidence Service; it must remain evidence-only and must not be conflated with execution or Broker integration.
+M3 evidence is maintained in `../completed/005-m3-strategy-evidence.md`. The next bounded milestone is M4 LLM Evidence Service; it must remain evidence-only and must not be conflated with execution or Broker integration.

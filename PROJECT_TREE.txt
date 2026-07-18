@@ -42,10 +42,10 @@
 ./docs/codex/TEST_MATRIX.md
 ./docs/codex/USER_ACTIONS_BEFORE_CODEX.md
 ./docs/exec-plans/active/001-complete-platform.md
-./docs/exec-plans/active/005-m3-strategy-evidence.md
 ./docs/exec-plans/completed/002-m0-baseline-safety.md
 ./docs/exec-plans/completed/003-m1-pit-data-kernel.md
 ./docs/exec-plans/completed/004-m2-portfolio-backtest.md
+./docs/exec-plans/completed/005-m3-strategy-evidence.md
 ./docs/research/M3_METHOD_EVIDENCE.md
 ./docs/v2-plan/00_BASELINE_PROVENANCE.md
 ./docs/v2-plan/01_CONVERSATION_AND_PACKAGE_AUDIT_ZH.md
