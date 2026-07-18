@@ -11,6 +11,7 @@ from hanalpha.evidence.models import (
     EvidenceClaim,
     EvidenceDocument,
     ExtractionResult,
+    ProviderCallMetadata,
 )
 
 
@@ -64,13 +65,49 @@ class EvidenceStore:
               event_key TEXT NOT NULL,
               cache_key TEXT NOT NULL,
               extractor_id TEXT NOT NULL,
+              extractor_config_hash TEXT,
               started_at TEXT NOT NULL,
               completed_at TEXT,
               status TEXT NOT NULL,
-              error_type TEXT
+              error_type TEXT,
+              provider TEXT,
+              request_id TEXT,
+              response_id TEXT,
+              actual_model TEXT,
+              http_status INTEGER,
+              input_tokens INTEGER,
+              cached_input_tokens INTEGER,
+              output_tokens INTEGER,
+              reasoning_tokens INTEGER,
+              latency_ms INTEGER,
+              estimated_cost_usd TEXT,
+              cost_source TEXT
             );
             """
         )
+        existing = {
+            row["name"] for row in self.connection.execute("PRAGMA table_info(model_call_attempts)")
+        }
+        additions = {
+            "extractor_config_hash": "TEXT",
+            "provider": "TEXT",
+            "request_id": "TEXT",
+            "response_id": "TEXT",
+            "actual_model": "TEXT",
+            "http_status": "INTEGER",
+            "input_tokens": "INTEGER",
+            "cached_input_tokens": "INTEGER",
+            "output_tokens": "INTEGER",
+            "reasoning_tokens": "INTEGER",
+            "latency_ms": "INTEGER",
+            "estimated_cost_usd": "TEXT",
+            "cost_source": "TEXT",
+        }
+        for name, sql_type in additions.items():
+            if name not in existing:
+                self.connection.execute(
+                    f"ALTER TABLE model_call_attempts ADD COLUMN {name} {sql_type}"
+                )
         self.connection.commit()
 
     def close(self) -> None:
@@ -113,6 +150,7 @@ class EvidenceStore:
         *,
         cache_key: str,
         extractor_id: str,
+        extractor_config_hash: str,
         at: datetime,
     ) -> str:
         try:
@@ -131,9 +169,17 @@ class EvidenceStore:
             )
             self.connection.execute(
                 """INSERT INTO model_call_attempts
-                   (attempt_id, event_key, cache_key, extractor_id, started_at, status)
-                   VALUES (?, ?, ?, ?, ?, 'started')""",
-                (attempt_id, event_key, cache_key, extractor_id, at.isoformat()),
+                   (attempt_id, event_key, cache_key, extractor_id,
+                    extractor_config_hash, started_at, status)
+                   VALUES (?, ?, ?, ?, ?, ?, 'started')""",
+                (
+                    attempt_id,
+                    event_key,
+                    cache_key,
+                    extractor_id,
+                    extractor_config_hash,
+                    at.isoformat(),
+                ),
             )
             self.connection.commit()
         except BaseException:
@@ -192,15 +238,86 @@ class EvidenceStore:
     ) -> None:
         with self.connection:
             for claim in claims:
-                self.connection.execute(
-                    "INSERT OR IGNORE INTO claims VALUES (?, ?, ?)",
-                    (claim.claim_id, claim.source_document_id, claim.model_dump_json()),
-                )
+                self._put_claim(claim)
             for edge in edges:
                 self.connection.execute(
                     "INSERT OR IGNORE INTO contradiction_edges VALUES (?, ?)",
                     (edge.edge_id, edge.model_dump_json()),
                 )
+
+    def finalize_extraction(
+        self,
+        attempt_id: str,
+        *,
+        cache_key: str,
+        result: ExtractionResult,
+        claims: tuple[EvidenceClaim, ...],
+        edges: tuple[ContradictionEdge, ...],
+        call: ProviderCallMetadata,
+        at: datetime,
+    ) -> None:
+        result_json = result.model_dump_json()
+        with self.connection:
+            for claim in claims:
+                self._put_claim(claim)
+            for edge in edges:
+                serialized = edge.model_dump_json()
+                row = self.connection.execute(
+                    "SELECT edge_json FROM contradiction_edges WHERE edge_id=?",
+                    (edge.edge_id,),
+                ).fetchone()
+                if row is not None and row["edge_json"] != serialized:
+                    raise RuntimeError("immutable contradiction conflict")
+                self.connection.execute(
+                    "INSERT OR IGNORE INTO contradiction_edges VALUES (?, ?)",
+                    (edge.edge_id, serialized),
+                )
+            row = self.connection.execute(
+                "SELECT result_json FROM extraction_cache WHERE cache_key=?", (cache_key,)
+            ).fetchone()
+            if row is not None and row["result_json"] != result_json:
+                raise RuntimeError("extraction cache conflict")
+            self.connection.execute(
+                "INSERT OR IGNORE INTO extraction_cache VALUES (?, ?, ?)",
+                (cache_key, result_json, at.isoformat()),
+            )
+            updated = self.connection.execute(
+                """UPDATE model_call_attempts SET
+                   completed_at=?, status='completed', provider=?, request_id=?, response_id=?,
+                   actual_model=?, http_status=?, input_tokens=?, cached_input_tokens=?,
+                   output_tokens=?, reasoning_tokens=?, latency_ms=?, estimated_cost_usd=?,
+                   cost_source=? WHERE attempt_id=? AND status='started'""",
+                (
+                    at.isoformat(),
+                    call.provider,
+                    call.request_id,
+                    call.response_id,
+                    call.actual_model,
+                    call.http_status,
+                    call.input_tokens,
+                    call.cached_input_tokens,
+                    call.output_tokens,
+                    call.reasoning_tokens,
+                    call.latency_ms,
+                    str(call.estimated_cost_usd) if call.estimated_cost_usd is not None else None,
+                    call.cost_source,
+                    attempt_id,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("model call attempt is missing or already completed")
+
+    def _put_claim(self, claim: EvidenceClaim) -> None:
+        serialized = claim.model_dump_json()
+        row = self.connection.execute(
+            "SELECT claim_json FROM claims WHERE claim_id=?", (claim.claim_id,)
+        ).fetchone()
+        if row is not None and row["claim_json"] != serialized:
+            raise RuntimeError("immutable claim conflict")
+        self.connection.execute(
+            "INSERT OR IGNORE INTO claims VALUES (?, ?, ?)",
+            (claim.claim_id, claim.source_document_id, serialized),
+        )
 
     def claims_as_of(self, as_of: datetime) -> tuple[EvidenceClaim, ...]:
         rows = self.connection.execute("SELECT claim_json FROM claims ORDER BY claim_id").fetchall()

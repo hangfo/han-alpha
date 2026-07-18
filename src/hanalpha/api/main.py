@@ -32,6 +32,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     state.system = system
     state.ledger = ledger
     yield
+    system.close()
     ledger.close()
 
 

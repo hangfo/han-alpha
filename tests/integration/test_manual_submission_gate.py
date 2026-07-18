@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from hanalpha.agents import AgentCommittee, EvidenceAgent, MarketAlignmentAgent, SkepticAgent
 from hanalpha.config import SecretSettings
 from hanalpha.data.synthetic import SyntheticMarketDataProvider
 from hanalpha.domain.clock import FixedDecisionClock
 from hanalpha.domain.enums import OperatingMode
-from hanalpha.execution import SimulatedBroker
+from hanalpha.evidence.extractors import DeterministicEvidenceExtractor
+from hanalpha.evidence.service import EvidenceService
+from hanalpha.evidence.store import EvidenceStore
+from hanalpha.execution import DurableExecutionStore, SimulatedBroker
 from hanalpha.orchestrator import TradingSystem
 from hanalpha.portfolio import Ledger
 from hanalpha.runtime.capabilities import build_runtime_access
@@ -28,7 +30,10 @@ async def test_paper_manual_never_auto_submits(tmp_path, risk_config, now) -> No
         provider=SyntheticMarketDataProvider(gated.bar_interval_minutes),
         broker=SimulatedBroker(gated.starting_cash, gated.execution),
         ledger=ledger,
-        committee=AgentCommittee([EvidenceAgent(), MarketAlignmentAgent(), SkepticAgent()]),
+        evidence_service=EvidenceService(
+            EvidenceStore(tmp_path / "evidence.sqlite3"), DeterministicEvidenceExtractor()
+        ),
+        execution_store=DurableExecutionStore(tmp_path / "execution.sqlite3"),
         runtime_access=runtime_access,
         clock=FixedDecisionClock(now),
     )
@@ -40,9 +45,6 @@ async def test_paper_manual_never_auto_submits(tmp_path, risk_config, now) -> No
     assert system.pending_orders
     snapshot = await system.broker.get_account_snapshot()
     assert not snapshot.positions
-    assert any(
-        event["status"] == "PROPOSED"
-        for row in result["orders"]
-        for event in row["events"]
-    )
+    assert any(event["status"] == "PROPOSED" for row in result["orders"] for event in row["events"])
+    system.close()
     ledger.close()

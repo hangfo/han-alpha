@@ -1,8 +1,8 @@
 # Active execution plan: complete Han Alpha platform
 
-Status: ACTIVE; M4 complete locally, M5 is next
+Status: ACTIVE; M5 complete locally, M6 is next
 Owner: Codex
-Last updated: 2026-07-18
+Last updated: 2026-07-19
 
 ## Goal
 
@@ -25,7 +25,7 @@ Codex must rerun and replace these statements with current command evidence.
 - [x] M2 deterministic portfolio replay and experiment registry
 - [x] M3 preregistered strategy baselines and statistical evidence
 - [x] M4 LLM Evidence Service, caching, budgets and ablation
-- [ ] M5 durable execution control plane and Fake Broker
+- [x] M5 durable execution control plane and Fake Broker
 - [ ] M6 IBKR Paper integration and observation
 - [ ] M7 Ops Dashboard, observability and recovery operations
 - [ ] M8 Live Proposal independent review
@@ -40,6 +40,7 @@ Record important decisions here with date, alternatives, and consequences. Do no
 - 2026-07-18: M2 deterministic portfolio replay and experiment lifecycle passed 110 tests at 80.14% branch coverage in local and clean hash-locked Python 3.12.13 environments. M3 may design preregistered strategy evidence, but real data acquisition remains separately gated.
 - 2026-07-18: M3 closed the replay truth gaps, added preregistered interpretable baselines and fail-closed statistical/promotion governance. Local verification passed 133 tests at 85.48% branch coverage; the live IBKR adapter is explicitly excluded because it is credential-gated M6 scope. M4 may add evidence-only LLM assistance without changing sizing, risk or Broker authority.
 - 2026-07-18: M3 authority amendment removed caller-reported promotion and descriptive counterfactuals, persisted atomic research allocations, and adopted adverse same-bar protection. M4 added a citation-bound, expiring, cached and budgeted Evidence Service with no Broker/sizing/risk authority. No real Provider call or real-data Alpha evaluation was performed. M5 is the next local milestone.
+- 2026-07-19: M4 audit amendments fixed the raw Responses boundary, backend citation resolution, review binding, ablation arithmetic, cache/audit scope and no-trade promotion. M5 added the durable capsule/reservation/outbox/inbox/single-writer/Fake-Broker/reconciliation control plane and removed direct new-exposure Broker submission from the runtime. No real Provider or Broker call was made. M6 is authorized only for explicit IBKR Paper integration and observation.
 
 ## Verification log
 
@@ -62,5 +63,8 @@ M3 evidence is maintained in `../completed/005-m3-strategy-evidence.md`; its
 authority amendment is recorded in ADR 0005.
 
 M4 evidence is maintained in `../completed/006-m4-evidence-service.md`. The next
-bounded milestone is M5 durable execution control plane and Fake Broker. M6
-IBKR connectivity remains separately credential-gated.
+audit amendment is in `../../v2-plan/12_M4_M5_AUDIT_INTEGRATION_DECISIONS_ZH.md`.
+
+M5 evidence is maintained in `../completed/007-m5-durable-execution.md`. The next
+bounded milestone is M6 IBKR Paper integration; connectivity and real callbacks
+remain separately credential-gated.

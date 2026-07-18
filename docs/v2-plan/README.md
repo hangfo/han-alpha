@@ -1,6 +1,6 @@
 # Han Alpha V2 设计审查索引
 
-状态：**M0-M4 已完成本地验收；M5 durable execution 是下一阶段。**
+状态：**M0-M5 已完成本地验收；M6 IBKR Paper 是下一阶段。**
 
 本目录起源于对原会话最终附件 `han-alpha-codex-ready.zip` 与最后一版
 Codex Goal 提示词的独立复核。00-06 保存设计冻结背景，07 以后记录逐里程碑

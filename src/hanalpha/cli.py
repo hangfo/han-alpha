@@ -140,6 +140,8 @@ def demo(
                 )
             console.print_json(json.dumps(await system.status(), default=str))
         finally:
+            if "system" in locals():
+                system.close()
             ledger.close()
 
     asyncio.run(_run())
@@ -352,6 +354,7 @@ def worker(
                 if cycles == 0 or completed < cycles:
                     await asyncio.sleep(interval_seconds)
         finally:
+            system.close()
             ledger.close()
 
     asyncio.run(_run())

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -21,7 +22,7 @@ class ClaimType(StrEnum):
 
 
 class EvidenceDecision(StrEnum):
-    ALLOW = "allow"
+    NO_OBJECTION = "no_objection"
     VETO = "veto"
     ABSTAIN = "abstain"
 
@@ -80,6 +81,14 @@ class EvidenceDocument(BaseModel):
         return self
 
 
+class CitationDraft(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    quote: str = Field(min_length=1, max_length=2_000)
+    occurrence_hint: int = Field(default=1, gt=0)
+    section: str | None = Field(default=None, max_length=200)
+
+
 class SourceSpan(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -102,10 +111,15 @@ class ClaimDraft(BaseModel):
     value: str = Field(min_length=1, max_length=500)
     unit: str | None = Field(default=None, max_length=50)
     effective_at: datetime
-    expires_at: datetime
     confidence: float = Field(ge=0, le=1)
-    spans: tuple[SourceSpan, ...] = Field(min_length=1)
+    citations: tuple[CitationDraft, ...] = Field(min_length=1)
     invalidation_conditions: tuple[str, ...] = ()
+    subject: str = Field(default="entity", min_length=1, max_length=200)
+    metric: str | None = Field(default=None, max_length=100)
+    segment: str | None = Field(default=None, max_length=100)
+    geography: str | None = Field(default=None, max_length=100)
+    fiscal_period: str | None = Field(default=None, max_length=100)
+    time_horizon: str | None = Field(default=None, max_length=100)
 
 
 class ExtractionResult(BaseModel):
@@ -122,6 +136,30 @@ class ExtractionResult(BaseModel):
         if not self.abstain and not self.claims:
             raise ValueError("non-abstaining extraction requires claims")
         return self
+
+
+class ProviderCallMetadata(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: str
+    request_id: str | None = None
+    response_id: str | None = None
+    actual_model: str
+    http_status: int | None = None
+    input_tokens: int = Field(default=0, ge=0)
+    cached_input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    reasoning_tokens: int = Field(default=0, ge=0)
+    latency_ms: int = Field(default=0, ge=0)
+    estimated_cost_usd: Decimal | None = Field(default=None, ge=0)
+    cost_source: str = "unpriced_usage"
+
+
+class ExtractionEnvelope(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    result: ExtractionResult
+    call: ProviderCallMetadata
 
 
 class EvidenceClaim(BaseModel):
@@ -141,6 +179,15 @@ class EvidenceClaim(BaseModel):
     extractor_version: str
     confidence: float = Field(ge=0, le=1)
     invalidation_conditions: tuple[str, ...] = ()
+    subject: str
+    metric: str | None = None
+    segment: str | None = None
+    geography: str | None = None
+    fiscal_period: str | None = None
+    time_horizon: str | None = None
+    claim_revision: int = Field(default=1, gt=0)
+    supersedes_claim_id: str | None = Field(default=None, pattern=HASH_PATTERN)
+    revision_reason: str | None = None
 
     @model_validator(mode="after")
     def validate_times(self) -> EvidenceClaim:

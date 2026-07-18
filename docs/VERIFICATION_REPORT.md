@@ -258,3 +258,53 @@ commands depend on a future credentialed acceptance harness and explicit cost
 authorization. NOT IMPLEMENTED: durable execution/Fake Broker (M5), IBKR Paper
 reconciliation (M6), Ops Dashboard (M7), and live-proposal independent review
 (M8). No profitability claim is made.
+
+## M4 audit amendment and M5 durable execution - 2026-07-19
+
+Implemented and verified locally without real Provider, vendor, IBKR or external
+order access:
+
+- raw Responses HTTP parsing over `output[].content[]`, refusal handling and
+  Provider request/model/token/cache/reasoning/latency audit;
+- backend exact-quote span/hash resolution, deterministic claim expiry, scoped
+  contradictions, immutable conflicts and atomic extraction finalization;
+- evidence review bound to candidate/decision/entity/snapshot/time/config and
+  `NO_OBJECTION` semantics;
+- fixed-decision-set, risk-weighted ablation without denominator or attribution
+  double counting;
+- TEST-only, non-counterfactual promotion with real fill, time-in-market and
+  benchmark-excess gates;
+- runtime M4 Evidence Snapshot/Review to immutable Decision Capsule boundary;
+  new exposure is staged to M5 and never directly submitted by the decision loop;
+- capacity-checked durable reservation, manual approval, economic intent,
+  transactional outbox/inbox, single-writer lease and Broker fencing;
+- persistent fault Fake Broker with accepted/dropped response, duplicate Ack,
+  partial fill/restart, reject, Broker-only, missing protection, Fill/Cancel race,
+  late commission and Broker tape;
+- order/fill/position/cash projections, startup reconciliation, Unknown Submit
+  resolution, Critical freeze, no-trade/reality-gap and naked-exposure ledgers.
+
+Canonical local result in project `.venv` on Python 3.12.13:
+
+- `source .venv/bin/activate && ./scripts/preflight.sh`: PASS;
+- `source .venv/bin/activate && ./scripts/verify_all.sh`: PASS;
+- Ruff: PASS;
+- mypy strict: PASS, 94 source files;
+- pytest: PASS, 159 tests;
+- branch-aware coverage: 85.54%, required threshold 85%;
+- sdist/wheel, doctor, three-cycle zero-credential synthetic demo and 400-bar
+  registered backtest: PASS;
+- `git diff --check`: PASS;
+- one existing upstream Starlette/FastAPI TestClient deprecation warning remains
+  visible and non-fatal.
+
+VERIFIED: all supplied M4 P0/P1 and Promotion recommendations were either
+implemented or deliberately narrowed as documented in
+`docs/v2-plan/12_M4_M5_AUDIT_INTEGRATION_DECISIONS_ZH.md`; M5 local Fake Broker
+control-plane invariants pass. BLOCKED: real Provider billing/429/5xx behavior,
+licensed PIT incremental value, authenticated IBKR Paper reconciliation and
+callbacks, real bracket transmit/session reset, and forward Paper observation.
+NOT IMPLEMENTED in M5: durable IBKR cancel/flatten commands (the current
+authenticated emergency path is risk-reducing only), Dashboard (M7), and Live
+Proposal independent review (M8). No profitability or production-readiness claim
+is made.

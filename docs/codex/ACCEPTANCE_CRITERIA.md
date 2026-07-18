@@ -66,6 +66,10 @@ Provider 故障行为与真实 PIT on/off 增量价值仍为 BLOCKED，不得据
 - [ ] kill switch、freeze、cancel-all和flatten-all可重复调用且安全。
 - [ ] flatten缺失可靠报价时不会猜价格。
 
+M5已在本地Fake Broker边界验证并发Reservation容量、经济订单幂等、持久
+freeze、Unknown Submit对账和缺失保护冻结；真实IBKR及完整cancel/flatten
+单写入者路径仍属于M6，因此以上平台级条目暂不整体勾选。
+
 ## 8. 工程质量
 
 - [x] Ruff通过。

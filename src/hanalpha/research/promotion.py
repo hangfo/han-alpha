@@ -9,7 +9,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from hanalpha.experiments.models import ExperimentResult, TrialStatus
+from hanalpha.experiments.models import ExperimentResult, TrialStatus, WindowRole
 from hanalpha.experiments.registry import ExperimentRegistry, IllegalTrialTransition
 from hanalpha.pit.models import HASH_PATTERN, require_aware
 from hanalpha.simulation.events import canonical_hash
@@ -27,6 +27,9 @@ class PromotionThresholds(BaseModel):
     maximum_drawdown: Decimal = Field(default=Decimal("0.25"), ge=0, le=1)
     minimum_cost_stress_return: Decimal = Decimal("0")
     maximum_single_instrument_contribution: Decimal = Field(default=Decimal("0.35"), ge=0, le=1)
+    minimum_fills: int = Field(default=2, ge=2)
+    minimum_time_in_market: Decimal = Field(default=Decimal("0.01"), gt=0, le=1)
+    minimum_benchmark_excess_return: Decimal = Decimal("0")
 
 
 class PromotionEvidence(BaseModel):
@@ -48,6 +51,9 @@ class PromotionEvidence(BaseModel):
     reproducible: bool
     independent_approved: bool
     budget_exhausted: bool = False
+    fills: int = Field(ge=0)
+    time_in_market: Decimal = Field(ge=0, le=1)
+    benchmark_excess_return: Decimal
 
 
 def promotion_failures(
@@ -85,6 +91,15 @@ def promotion_failures(
         (evidence.artifacts_verified, "artifact_verification_failed"),
         (evidence.reproducible, "reproducibility_failed"),
         (evidence.independent_approved, "independent_approval_missing"),
+        (evidence.fills >= thresholds.minimum_fills, "insufficient_fills"),
+        (
+            evidence.time_in_market >= thresholds.minimum_time_in_market,
+            "insufficient_time_in_market",
+        ),
+        (
+            evidence.benchmark_excess_return >= thresholds.minimum_benchmark_excess_return,
+            "benchmark_excess_return_below_threshold",
+        ),
     )
     return tuple(reason for passed, reason in checks if not passed)
 
@@ -104,6 +119,7 @@ class ValidationAssessment(BaseModel):
     cost_stress_return: Decimal
     largest_instrument_contribution: Decimal = Field(ge=0)
     parameter_stable: bool
+    benchmark_return: Decimal
     reproduction_result_hash: str | None = Field(default=None, pattern=HASH_PATTERN)
     assessed_at: datetime
     signature: str = Field(pattern=HASH_PATTERN)
@@ -163,6 +179,10 @@ class PromotionService:
         if not history or history[-1].status != TrialStatus.COMPLETED:
             raise IllegalTrialTransition("only a completed trial can be promoted")
         manifest = self.registry.manifest(experiment_id)
+        if manifest.window_role != WindowRole.TEST:
+            raise IllegalTrialTransition("only a TEST-window experiment can be promoted")
+        if manifest.counterfactual_of is not None:
+            raise IllegalTrialTransition("counterfactual experiments cannot be promoted")
         protocol = self.registry.protocol(manifest.protocol_hash)
         verified = self._verified_artifacts(experiment_id)
         required = {
@@ -218,6 +238,9 @@ class PromotionService:
             reproducible=assessment.reproduction_result_hash == result.result_hash,
             independent_approved=True,
             budget_exhausted=False,
+            fills=result.fill_count,
+            time_in_market=result.metrics.time_in_market,
+            benchmark_excess_return=(result.metrics.total_return - assessment.benchmark_return),
         )
         thresholds = PromotionThresholds(
             minimum_observations=protocol.success.minimum_observations,
@@ -227,6 +250,9 @@ class PromotionService:
             maximum_drawdown=protocol.success.maximum_drawdown,
             minimum_cost_stress_return=protocol.success.minimum_cost_stress_return,
             maximum_single_instrument_contribution=(protocol.success.maximum_contribution_share),
+            minimum_fills=protocol.success.minimum_fills,
+            minimum_time_in_market=protocol.success.minimum_time_in_market,
+            minimum_benchmark_excess_return=(protocol.success.minimum_benchmark_excess_return),
         )
         failures = promotion_failures(evidence, thresholds)
         if failures:

@@ -64,6 +64,9 @@ class SuccessCriteria(BaseModel):
     minimum_cost_stress_return: Decimal
     maximum_contribution_share: Decimal = Field(gt=0, le=1)
     minimum_observations: int = Field(ge=30)
+    minimum_fills: int = Field(default=2, ge=2)
+    minimum_time_in_market: Decimal = Field(default=Decimal("0.01"), gt=0, le=1)
+    minimum_benchmark_excess_return: Decimal = Decimal("0")
 
 
 class PreregisteredProtocol(BaseModel):
