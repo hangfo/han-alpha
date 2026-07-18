@@ -229,6 +229,37 @@ def bootstrap_mean_interval(
     return float(np.quantile(means, tail)), float(np.quantile(means, 1 - tail))
 
 
+def moving_block_bootstrap_interval(
+    returns: list[float],
+    *,
+    block_length: int,
+    seed: int,
+    samples: int = 2000,
+    confidence: float = 0.95,
+) -> tuple[float, float]:
+    values = np.asarray(returns, dtype=float)
+    if (
+        len(values) < 4
+        or block_length < 2
+        or block_length > len(values)
+        or samples < 100
+        or not 0 < confidence < 1
+    ):
+        raise ValueError("invalid moving-block bootstrap configuration")
+    if not np.isfinite(values).all():
+        raise ValueError("returns must be finite")
+    blocks = np.asarray([np.roll(values, -start)[:block_length] for start in range(len(values))])
+    block_count = math.ceil(len(values) / block_length)
+    rng = np.random.default_rng(seed)
+    means = np.empty(samples)
+    for index in range(samples):
+        selected = rng.integers(0, len(blocks), size=block_count)
+        sample = blocks[selected].reshape(-1)[: len(values)]
+        means[index] = float(np.mean(sample))
+    tail = (1 - confidence) / 2
+    return float(np.quantile(means, tail)), float(np.quantile(means, 1 - tail))
+
+
 def holm_adjust(p_values: list[float]) -> list[float]:
     if any(not 0 <= value <= 1 for value in p_values):
         raise ValueError("p-values must be between zero and one")

@@ -4,42 +4,35 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from hanalpha.experiments.models import ArtifactDigest, ExperimentManifest, TrialStatus
+from hanalpha.experiments.models import ArtifactDigest, ExperimentManifest, TrialStatus, WindowRole
 from hanalpha.experiments.registry import ExperimentRegistry, IllegalTrialTransition
-from hanalpha.research.promotion import PromotionEvidence, PromotionThresholds
+from tests.experiments.helpers import authorized_manifest, protocol
 
 
-def _manifest(**updates) -> ExperimentManifest:
-    payload = {
-        "snapshot_id": "1" * 64,
-        "code_hash": "2" * 64,
-        "config_hash": "3" * 64,
-        "cost_policy_hash": "4" * 64,
-        "universe_hash": "5" * 64,
-        "metric_schema_version": "1",
-        "seed": 7,
-        "strategy_id": "baseline",
-        "strategy_version": "1",
-        "hypothesis": "mechanical fixture hypothesis, not alpha",
-        "parameters": {"slow": 20, "fast": 5},
-    }
-    payload.update(updates)
-    return ExperimentManifest.model_validate(payload)
+def _manifest(
+    registry: ExperimentRegistry, now: datetime, *, key: str = "trial", **updates: object
+) -> ExperimentManifest:
+    return authorized_manifest(registry, at=now, key=key, **updates)
 
 
-def test_manifest_hash_is_canonical_and_sensitive() -> None:
-    first = _manifest(parameters={"slow": 20, "fast": 5})
-    second = _manifest(parameters={"fast": 5, "slow": 20})
-    assert first.experiment_id == second.experiment_id
-    assert _manifest(seed=8).experiment_id != first.experiment_id
+def test_manifest_hash_is_canonical_and_sensitive(tmp_path) -> None:
+    registry = ExperimentRegistry(tmp_path / "experiments.sqlite3")
+    now = datetime(2024, 1, 1, tzinfo=UTC)
+    try:
+        first = _manifest(registry, now, parameters={"slow": 20, "fast": 5})
+        second = _manifest(registry, now, parameters={"fast": 5, "slow": 20})
+        assert first.experiment_id == second.experiment_id
+        assert _manifest(registry, now, key="other", seed=8).experiment_id != first.experiment_id
+    finally:
+        registry.close()
 
 
 def test_registry_treats_reordered_manifest_parameters_as_idempotent(tmp_path) -> None:
     registry = ExperimentRegistry(tmp_path / "experiments.sqlite3")
     now = datetime(2024, 1, 1, tzinfo=UTC)
-    first = _manifest(parameters={"slow": 20, "fast": 5})
-    second = _manifest(parameters={"fast": 5, "slow": 20})
     try:
+        first = _manifest(registry, now, parameters={"slow": 20, "fast": 5})
+        second = _manifest(registry, now, parameters={"fast": 5, "slow": 20})
         assert registry.register(first, at=now) == registry.register(second, at=now)
         assert len(registry.history(first.experiment_id)) == 1
     finally:
@@ -49,8 +42,8 @@ def test_registry_treats_reordered_manifest_parameters_as_idempotent(tmp_path) -
 def test_failed_trial_remains_in_strategy_cemetery_and_cannot_promote(tmp_path) -> None:
     registry = ExperimentRegistry(tmp_path / "experiments.sqlite3")
     now = datetime(2024, 1, 1, tzinfo=UTC)
-    manifest = _manifest()
     try:
+        manifest = _manifest(registry, now)
         registry.register(manifest, at=now)
         registry.transition(
             manifest.experiment_id, TrialStatus.RUNNING, at=now + timedelta(seconds=1)
@@ -77,20 +70,21 @@ def test_failed_trial_remains_in_strategy_cemetery_and_cannot_promote(tmp_path) 
 
 def test_counterfactual_requires_registered_parent(tmp_path) -> None:
     registry = ExperimentRegistry(tmp_path / "experiments.sqlite3")
+    now = datetime(2024, 1, 1, tzinfo=UTC)
     try:
-        child = _manifest(counterfactual_of="f" * 64)
+        child = _manifest(registry, now, counterfactual_of="f" * 64)
         with pytest.raises(KeyError, match="counterfactual"):
-            registry.register(child, at=datetime(2024, 1, 1, tzinfo=UTC))
+            registry.register(child, at=now)
     finally:
         registry.close()
 
 
 def test_artifacts_are_hash_registered_and_conflicts_fail_closed(tmp_path) -> None:
     registry = ExperimentRegistry(tmp_path / "experiments.sqlite3")
-    manifest = _manifest()
     now = datetime(2024, 1, 1, tzinfo=UTC)
     artifact = ArtifactDigest(name="result.json", sha256="a" * 64, size=42)
     try:
+        manifest = _manifest(registry, now)
         registry.register(manifest, at=now)
         registry.record_artifact(
             manifest.experiment_id,
@@ -116,31 +110,11 @@ def test_artifacts_are_hash_registered_and_conflicts_fail_closed(tmp_path) -> No
         registry.close()
 
 
-def _promotion_evidence(**updates) -> PromotionEvidence:
-    payload = {
-        "protocol_hash": "p" * 64,
-        "expected_protocol_hash": "p" * 64,
-        "observations": 504,
-        "oos_return_after_costs": "0.08",
-        "deflated_sharpe_probability": "0.98",
-        "pbo": "0.10",
-        "max_drawdown": "0.12",
-        "cost_stress_return": "0.02",
-        "largest_instrument_contribution": "0.20",
-        "parameter_stable": True,
-        "artifacts_verified": True,
-        "reproducible": True,
-        "independent_approved": True,
-    }
-    payload.update(updates)
-    return PromotionEvidence.model_validate(payload)
-
-
-def test_completed_trial_requires_explicit_promotion_gate(tmp_path) -> None:
+def test_completed_trial_rejects_self_reported_promotion(tmp_path) -> None:
     registry = ExperimentRegistry(tmp_path / "experiments.sqlite3")
     now = datetime(2024, 1, 1, tzinfo=UTC)
-    manifest = _manifest()
     try:
+        manifest = _manifest(registry, now)
         registry.register(manifest, at=now)
         registry.transition(manifest.experiment_id, TrialStatus.RUNNING, at=now)
         registry.transition(
@@ -151,19 +125,44 @@ def test_completed_trial_requires_explicit_promotion_gate(tmp_path) -> None:
         )
         with pytest.raises(IllegalTrialTransition):
             registry.transition(manifest.experiment_id, TrialStatus.PROMOTED, at=now)
-        with pytest.raises(IllegalTrialTransition, match="pbo_gate"):
-            registry.promote(
-                manifest.experiment_id,
-                evidence=_promotion_evidence(pbo=None),
-                thresholds=PromotionThresholds(),
-                at=now,
-            )
-        registry.promote(
-            manifest.experiment_id,
-            evidence=_promotion_evidence(),
-            thresholds=PromotionThresholds(),
-            at=now,
-        )
-        assert registry.history(manifest.experiment_id)[-1].status == TrialStatus.PROMOTED
+        with pytest.raises(IllegalTrialTransition, match="self-reported"):
+            registry.promote(manifest.experiment_id, at=now)
+        assert registry.history(manifest.experiment_id)[-1].status == TrialStatus.COMPLETED
     finally:
         registry.close()
+
+
+def test_trial_budget_is_persistent_atomic_and_idempotent(tmp_path) -> None:
+    path = tmp_path / "experiments.sqlite3"
+    first = ExperimentRegistry(path)
+    second = ExperimentRegistry(path)
+    now = datetime(2024, 1, 1, tzinfo=UTC)
+    research_protocol = protocol(max_trials=1)
+    try:
+        first.register_protocol(research_protocol)
+        allocation = first.allocate_trial(
+            research_protocol.protocol_hash,
+            parameters={"fast": 5},
+            window_role=WindowRole.TEST,
+            idempotency_key="logical-trial",
+            at=now,
+        )
+        retry = second.allocate_trial(
+            research_protocol.protocol_hash,
+            parameters={"fast": 5},
+            window_role=WindowRole.TEST,
+            idempotency_key="logical-trial",
+            at=now,
+        )
+        assert retry.allocation_id == allocation.allocation_id
+        with pytest.raises(RuntimeError, match="budget"):
+            second.allocate_trial(
+                research_protocol.protocol_hash,
+                parameters={"fast": 6},
+                window_role=WindowRole.TEST,
+                idempotency_key="another-trial",
+                at=now,
+            )
+    finally:
+        first.close()
+        second.close()

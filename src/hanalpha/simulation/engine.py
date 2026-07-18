@@ -29,9 +29,12 @@ from hanalpha.simulation.orders import (
     TrackedOrder,
 )
 from hanalpha.simulation.portfolio import (
+    CashEntry,
+    JournalEntry,
     PortfolioLedger,
     PortfolioPolicy,
     PortfolioSnapshot,
+    PositionLot,
     ReservationRejected,
 )
 
@@ -75,6 +78,9 @@ class ReplayResult(BaseModel):
     fills: list[FillEvent]
     equity_points: list[EquityPoint]
     final_orders: list[TrackedOrder]
+    journal_entries: list[JournalEntry]
+    cash_entries: list[CashEntry]
+    position_lots: list[PositionLot]
 
 
 class PITEventCursor:
@@ -240,7 +246,10 @@ class PortfolioReplayEngine:
                     orders[order_id] = updated
                     fills.append(fill)
                     if fill.side == Side.BUY:
-                        self._create_protection(orders, ledger, updated, fill)
+                        child_ids = self._create_protection(orders, ledger, updated, fill)
+                        self._match_same_bar_protection(
+                            orders, ledger, fills, child_ids, bar, frame.as_of
+                        )
                     elif updated.state == SimulationOrderState.PARTIALLY_FILLED:
                         self._replace_oco_sibling(orders, ledger, updated, fill)
                     if updated.remaining_quantity == 0:
@@ -338,6 +347,9 @@ class PortfolioReplayEngine:
             fills=fills,
             equity_points=equity_points,
             final_orders=final_orders,
+            journal_entries=ledger.journal_entries,
+            cash_entries=ledger.cash_entries,
+            position_lots=ledger.lots,
         )
 
     @staticmethod
@@ -391,7 +403,7 @@ class PortfolioReplayEngine:
         ledger: PortfolioLedger,
         parent: TrackedOrder,
         fill: FillEvent,
-    ) -> None:
+    ) -> tuple[str, ...]:
         stop = parent.intent.protective_stop
         if stop is None:
             raise ReservationRejected("filled long entry has no protective stop")
@@ -406,7 +418,7 @@ class PortfolioReplayEngine:
                 kind=OrderKind.STOP_MARKET,
                 quantity=fill.quantity,
                 submitted_at=fill.occurred_at,
-                earliest_fill_at=fill.occurred_at + timedelta(microseconds=1),
+                earliest_fill_at=fill.occurred_at,
                 planned_price=stop,
                 stop_price=stop,
                 parent_order_id=parent.intent.order_id,
@@ -426,7 +438,7 @@ class PortfolioReplayEngine:
                     kind=OrderKind.LIMIT,
                     quantity=fill.quantity,
                     submitted_at=fill.occurred_at,
-                    earliest_fill_at=fill.occurred_at + timedelta(microseconds=1),
+                    earliest_fill_at=fill.occurred_at,
                     planned_price=target,
                     limit_price=target,
                     parent_order_id=parent.intent.order_id,
@@ -437,6 +449,35 @@ class PortfolioReplayEngine:
         for intent in children:
             ledger.reserve(intent)
             orders[intent.order_id] = TrackedOrder.proposed(intent).accept(fill.occurred_at)
+        return tuple(intent.order_id for intent in children)
+
+    def _match_same_bar_protection(
+        self,
+        orders: dict[str, TrackedOrder],
+        ledger: PortfolioLedger,
+        fills: list[FillEvent],
+        child_ids: tuple[str, ...],
+        bar: SimulationBar,
+        as_of: datetime,
+    ) -> None:
+        """Apply adverse stop-first ordering when entry and protection share an OHLC bar."""
+        for order_id in sorted(child_ids, key=lambda key: self._match_priority(orders[key])):
+            order = orders[order_id]
+            fill = self.exchange.match(order, bar, as_of=as_of, same_bar_protection=True)
+            if fill is None:
+                continue
+            self._cancel_oco_siblings(orders, ledger, order, fill.occurred_at)
+            ledger.apply_fill(fill)
+            orders[order_id] = order.apply_fill(
+                fill_id=fill.fill_id,
+                quantity=fill.quantity,
+                price=fill.price,
+                at=fill.occurred_at,
+            )
+            fills.append(fill)
+            if orders[order_id].remaining_quantity == 0:
+                ledger.release(order_id)
+            break
 
     @staticmethod
     def _replace_oco_sibling(

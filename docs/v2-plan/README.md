@@ -1,8 +1,11 @@
 # Han Alpha V2 设计审查索引
 
-状态：**设计冻结前审查；尚未开始实现。**
+状态：**M0-M4 已完成本地验收；M5 durable execution 是下一阶段。**
 
-本目录是对原会话最终附件 `han-alpha-codex-ready.zip` 与最后一版 Codex Goal 提示词的独立复核。原附件代码、测试和既有文档均保留为 V0.1 基线；本轮没有运行程序、测试、券商连接、数据下载或 LLM 调用，也没有修改交易逻辑。
+本目录起源于对原会话最终附件 `han-alpha-codex-ready.zip` 与最后一版
+Codex Goal 提示词的独立复核。00-06 保存设计冻结背景，07 以后记录逐里程碑
+实施决策。M0-M4 已运行本地验证并修改代码；仍未连接券商、下载真实供应商
+数据或调用真实 LLM Provider。
 
 ## 结论
 
@@ -17,6 +20,11 @@
 5. [04_MASTER_TASK_ZH.md](04_MASTER_TASK_ZH.md)：未来 Codex 实施时的完整任务规格。
 6. [05_CODEX_GOAL_PROMPT_ZH.md](05_CODEX_GOAL_PROMPT_ZH.md)：小于 4,000 字符的最新 Goal 提示词。
 7. [06_PUBLIC_EVIDENCE_REGISTER.md](06_PUBLIC_EVIDENCE_REGISTER.md)：公开资料、论文和官方文档证据表。
+8. [07_M0_CLOSEOUT_AND_M1_DECISION_ZH.md](07_M0_CLOSEOUT_AND_M1_DECISION_ZH.md)：M0 收口与 PIT 决策。
+9. [08_M1_FROZEN_FIXTURE_SPEC_ZH.md](08_M1_FROZEN_FIXTURE_SPEC_ZH.md)：M1 冻结 fixture 规格。
+10. [09_PASTED_REVIEW_AND_M2_DECISIONS_ZH.md](09_PASTED_REVIEW_AND_M2_DECISIONS_ZH.md)：M2 审计并入决定。
+11. [10_M3_AUDIT_INTEGRATION_DECISIONS_ZH.md](10_M3_AUDIT_INTEGRATION_DECISIONS_ZH.md)：M3 审计并入决定。
+12. [11_M3_CLOSEOUT_AND_M4_AUDIT_DECISIONS_ZH.md](11_M3_CLOSEOUT_AND_M4_AUDIT_DECISIONS_ZH.md)：M3 权限收口与 M4 证据服务决定。
 
 ## 决策摘要
 

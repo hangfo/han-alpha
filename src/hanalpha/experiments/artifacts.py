@@ -5,7 +5,10 @@ import html
 import json
 import os
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
+
+from pydantic import BaseModel
 
 from hanalpha.experiments.models import (
     ArtifactDigest,
@@ -26,7 +29,10 @@ class ResultBundleWriter:
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
         payloads = {
+            "cash-ledger.jsonl": self._jsonl(result.cash_entries),
+            "journal.jsonl": self._jsonl(result.journal_entries),
             "manifest.json": self._json(manifest.model_dump(mode="json", exclude_none=True)),
+            "position-lots.jsonl": self._jsonl(result.position_lots),
             "result.json": self._json(result.model_dump(mode="json", exclude_none=True)),
             "report.html": self._html(manifest, result).encode(),
         }
@@ -63,6 +69,20 @@ class ResultBundleWriter:
     @staticmethod
     def _json(payload: object) -> bytes:
         return (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+    @staticmethod
+    def _jsonl(items: Sequence[BaseModel]) -> bytes:
+        return b"".join(
+            (
+                json.dumps(
+                    item.model_dump(mode="json", exclude_none=True),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode()
+            for item in items
+        )
 
     @staticmethod
     def _html(manifest: ExperimentManifest, result: ExperimentResult) -> str:

@@ -216,3 +216,45 @@ Canonical local result:
 The local coverage denominator explicitly omits `execution/ibkr.py`, whose real callback/reconciliation behavior is credential-gated M6 scope. Its capability and no-live-auto boundaries remain tested and unchanged. The existing upstream Starlette/FastAPI TestClient deprecation warning remains non-fatal.
 
 M3 is VERIFIED for local research and replay mechanics. Real Alpha evidence remains BLOCKED on licensed point-in-time data, timestamp and universe review, PIT earnings expectations, and a complete corporate-action entitlement/payment contract. Synthetic annualized metrics are not decision evidence. M4 may add evidence-only LLM assistance; LLMs still cannot size, change risk, promote experiments, or access a Broker.
+
+## M3 authority amendment and M4 Evidence Service - 2026-07-18
+
+Implemented and verified locally without vendor, Provider, LLM, IBKR or external
+order access:
+
+- registered protocols and atomic persistent trial allocations bind research
+  program, parameter hash and window role; retry idempotency does not bypass budget;
+- promotion is derived from immutable artifact digests, protocol/result binding,
+  signed validation and a separate signed independent approval; caller booleans
+  and researcher self-approval fail closed;
+- doubled-cost and delayed counterfactuals now execute through the replay runner;
+- entry-bar OHLC ambiguity uses adverse stop-first reduce-only protection;
+- moving-block bootstrap and event-label interval purging supplement M3 validation;
+- exposure metrics have distinct definitions and journal/cash/lot JSONL artifacts;
+- immutable PIT evidence documents, exact citation spans, claim expiry,
+  contradictions and content-addressed snapshots;
+- strict-schema/no-tool Responses adapter, deterministic extractor, exact cache
+  key, persistent call budget and success/failure attempt audit;
+- evidence review is limited to allow/veto/abstain on an existing candidate and
+  cannot fabricate a claim, size, change risk or call a Broker;
+- ablation accounting charges missed gain, Provider cost and latency.
+
+Canonical local result (project `.venv`, Python 3.12.13):
+
+- `./scripts/preflight.sh`: PASS after explicit `.venv` activation;
+- `./scripts/verify_all.sh`: PASS;
+- Ruff: PASS;
+- mypy strict: PASS, 89 source files;
+- pytest: PASS, 144 tests;
+- branch-aware coverage: 85.56%, required threshold 85%;
+- sdist/wheel, doctor, three-cycle synthetic demo and 400-bar registered
+  backtest: PASS;
+- the existing Starlette/FastAPI TestClient deprecation warning remains non-fatal.
+
+VERIFIED: M3 research-authority defects from the supplied audit are closed, and
+M4's local evidence-only boundary is complete. BLOCKED: real OpenAI authentication,
+429/5xx/latency/cost behavior and real PIT Agent on/off incremental value; exact
+commands depend on a future credentialed acceptance harness and explicit cost
+authorization. NOT IMPLEMENTED: durable execution/Fake Broker (M5), IBKR Paper
+reconciliation (M6), Ops Dashboard (M7), and live-proposal independent review
+(M8). No profitability claim is made.

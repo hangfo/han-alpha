@@ -20,6 +20,7 @@ class PortfolioMetrics(BaseModel):
     turnover: Decimal
     average_gross_exposure: Decimal
     time_weighted_exposure_ratio: Decimal
+    time_in_market: Decimal
     ending_equity: Decimal
     observations: int
     annualized_return: Decimal | None = None
@@ -52,6 +53,7 @@ def compute_portfolio_metrics(
     if len(points) == 1:
         average_gross = points[0].gross_exposure
         exposure_ratio = points[0].gross_exposure
+        time_in_market = Decimal("1") if points[0].gross_exposure > 0 else Decimal("0")
     else:
         weights = [
             Decimal(str((right.as_of - left.as_of).total_seconds()))
@@ -60,21 +62,23 @@ def compute_portfolio_metrics(
         if any(weight <= 0 for weight in weights):
             raise ValueError("equity point times must be strictly increasing")
         duration = sum(weights, Decimal("0"))
-        average_gross = (
-            sum(
-                (
-                    point.gross_exposure * weight
-                    for point, weight in zip(points[:-1], weights, strict=True)
-                ),
-                Decimal("0"),
-            )
-            / duration
+        average_gross = sum((point.gross_exposure for point in points), Decimal("0")) / Decimal(
+            len(points)
         )
-        exposure_ratio = (
+        weighted_exposure = sum(
+            (
+                point.gross_exposure * weight
+                for point, weight in zip(points[:-1], weights, strict=True)
+            ),
+            Decimal("0"),
+        )
+        exposure_ratio = weighted_exposure / duration
+        time_in_market = (
             sum(
                 (
-                    point.gross_exposure * weight
+                    weight
                     for point, weight in zip(points[:-1], weights, strict=True)
+                    if point.gross_exposure > 0
                 ),
                 Decimal("0"),
             )
@@ -96,6 +100,7 @@ def compute_portfolio_metrics(
         turnover=total_traded_notional / starting,
         average_gross_exposure=average_gross,
         time_weighted_exposure_ratio=exposure_ratio,
+        time_in_market=time_in_market,
         ending_equity=points[-1].net_liquidation,
         observations=len(points),
         annualized_return=annual_return,

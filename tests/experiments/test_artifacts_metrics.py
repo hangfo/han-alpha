@@ -6,8 +6,9 @@ from decimal import Decimal
 import pytest
 
 from hanalpha.experiments.artifacts import ResultBundleWriter
-from hanalpha.experiments.models import ExperimentManifest, ExperimentResult
+from hanalpha.experiments.models import ExperimentManifest, ExperimentResult, WindowRole
 from hanalpha.metrics.portfolio import EquityPoint, compute_portfolio_metrics
+from hanalpha.simulation.events import canonical_hash
 
 
 def _manifest() -> ExperimentManifest:
@@ -23,6 +24,11 @@ def _manifest() -> ExperimentManifest:
         strategy_version="1",
         hypothesis="fixture mechanics only",
         parameters={},
+        protocol_hash="8" * 64,
+        trial_allocation_id="9" * 64,
+        parameter_point_hash=canonical_hash({}),
+        window_role=WindowRole.TEST,
+        research_program_id="a" * 64,
     )
 
 
@@ -105,7 +111,9 @@ def test_metrics_are_time_weighted_and_require_strict_time() -> None:
         ),
     ]
     metrics = compute_portfolio_metrics(points, total_traded_notional=Decimal("0"))
+    assert metrics.average_gross_exposure == Decimal("0.3333333333333333333333333333")
     assert metrics.time_weighted_exposure_ratio == Decimal("0.25")
+    assert metrics.time_in_market == Decimal("0.25")
     assert metrics.time_under_water == Decimal("0.75")
     assert metrics.expected_shortfall_95 is not None
     with pytest.raises(ValueError, match="strictly"):

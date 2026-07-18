@@ -7,11 +7,6 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from hanalpha.experiments.models import ExperimentManifest
-from hanalpha.research.counterfactuals import (
-    counterfactual_manifests,
-    standard_counterfactual_suite,
-)
 from hanalpha.research.protocol import (
     DateWindow,
     ParameterRange,
@@ -23,9 +18,14 @@ from hanalpha.research.statistics import (
     bootstrap_mean_interval,
     deflated_sharpe_ratio,
     holm_adjust,
+    moving_block_bootstrap_interval,
     probability_of_backtest_overfitting,
 )
-from hanalpha.research.validation import rolling_walk_forward
+from hanalpha.research.validation import (
+    LabelInterval,
+    purge_overlapping_labels,
+    rolling_walk_forward,
+)
 
 
 def _protocol(**updates) -> PreregisteredProtocol:
@@ -33,6 +33,7 @@ def _protocol(**updates) -> PreregisteredProtocol:
     payload = {
         "name": "momentum-baseline",
         "version": "1",
+        "researcher_id": "fixture-researcher",
         "hypothesis": "medium-term relative strength persists after costs",
         "snapshot_id": "1" * 64,
         "universe_hash": "2" * 64,
@@ -121,29 +122,31 @@ def test_statistics_fail_closed_on_small_samples_and_detect_overfit() -> None:
     assert low < high
     adjusted = holm_adjust([0.01, 0.04, 0.20])
     assert adjusted == sorted(adjusted)
-
-
-def test_counterfactual_suite_is_budgeted_and_parent_linked() -> None:
-    protocol = _protocol()
-    base = ExperimentManifest(
-        snapshot_id=protocol.snapshot_id,
-        code_hash="5" * 64,
-        config_hash="6" * 64,
-        cost_policy_hash=protocol.cost_policy_hash,
-        universe_hash=protocol.universe_hash,
-        metric_schema_version="2",
-        seed=7,
-        strategy_id="momentum-baseline",
-        strategy_version="1",
-        hypothesis=protocol.hypothesis,
-        parameters={"lookback": 10},
+    block_low, block_high = moving_block_bootstrap_interval(
+        returns, block_length=10, seed=11, samples=500
     )
-    specs = standard_counterfactual_suite(parameter="lookback", base_value=10)
-    manifests, budget = counterfactual_manifests(base, specs, protocol.budget)
-    assert len({item.experiment_id for item in manifests}) == 4
-    assert all(item.counterfactual_of == base.experiment_id for item in manifests)
-    assert manifests[0].parameters["__cost_multiplier"] == "2"
-    assert manifests[1].parameters["__delay_bars"] == 1
-    assert budget.used_trials == 4
-    with pytest.raises(RuntimeError, match="budget"):
-        counterfactual_manifests(base, specs, ResearchBudget(max_trials=3, used_trials=0))
+    assert block_low < block_high
+
+
+def test_event_interval_purge_removes_only_overlapping_labels() -> None:
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    train = (
+        LabelInterval(
+            observation_id="safe",
+            information_start=start,
+            label_end=start + timedelta(days=2),
+        ),
+        LabelInterval(
+            observation_id="overlap",
+            information_start=start + timedelta(days=4),
+            label_end=start + timedelta(days=7),
+        ),
+    )
+    test = (
+        LabelInterval(
+            observation_id="test",
+            information_start=start + timedelta(days=6),
+            label_end=start + timedelta(days=8),
+        ),
+    )
+    assert [item.observation_id for item in purge_overlapping_labels(train, test)] == ["safe"]

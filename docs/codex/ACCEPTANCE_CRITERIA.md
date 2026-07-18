@@ -49,11 +49,14 @@ Codex必须逐项核对，不得用“代码已写”代替行为证明。
 
 ## 6. Agent安全
 
-- [ ] Agent不能访问Broker或仓位计算函数。
-- [ ] malformed JSON、伪造evidence、prompt injection均fail-closed。
-- [ ] LLM超时和限流不会生成未审查订单。
-- [ ] 相同证据缓存命中，不重复计费。
-- [ ] 提供Agent on/off增量报告。
+- [x] Agent不能访问Broker或仓位计算函数。
+- [x] malformed JSON、伪造evidence、prompt injection均fail-closed。
+- [x] LLM超时和限流不会生成未审查订单。
+- [x] 相同证据缓存命中，不重复计费。
+- [x] 提供Agent on/off增量报告。
+
+M4 以上五项为本地结构、fake/deterministic 测试和度量契约验收；真实
+Provider 故障行为与真实 PIT on/off 增量价值仍为 BLOCKED，不得据此声称 Alpha。
 
 ## 7. 风控和并发
 
@@ -65,11 +68,11 @@ Codex必须逐项核对，不得用“代码已写”代替行为证明。
 
 ## 8. 工程质量
 
-- [ ] Ruff通过。
-- [ ] Mypy strict通过。
-- [ ] 后端分支覆盖率至少85%。
+- [x] Ruff通过。
+- [x] Mypy strict通过。
+- [x] 后端分支覆盖率至少85%。
 - [ ] 前端测试通过。
-- [ ] package build通过。
+- [x] package build通过。
 - [ ] Docker Compose健康启动。
 - [ ] secret scan、dependency audit和基础SAST无高危未处理项。
 - [ ] CI与本地验证命令一致。

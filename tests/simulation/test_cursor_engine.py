@@ -449,6 +449,53 @@ def test_partial_entry_fills_create_matching_reduce_only_protection(simulation_t
     assert all(order.intent.parent_order_id for order in stops)
 
 
+def test_entry_bar_protection_uses_adverse_stop_first_policy(simulation_time) -> None:
+    proposal_bar = SimulationBar(
+        snapshot_id="1" * 64,
+        instrument_id="inst-alpha",
+        source_record_id="proposal",
+        source_revision=1,
+        event_time=simulation_time,
+        available_at=simulation_time,
+        open=100,
+        high=101,
+        low=99,
+        close=100,
+        volume=1000,
+    )
+    entry_bar = proposal_bar.model_copy(
+        update={
+            "source_record_id": "entry",
+            "event_time": simulation_time + timedelta(minutes=1),
+            "available_at": simulation_time + timedelta(minutes=1),
+            "high": 110,
+            "low": 90,
+        }
+    )
+    frames = [
+        ReplayFrame(snapshot_id="1" * 64, as_of=bar.available_at, bars=[bar])
+        for bar in (proposal_bar, entry_bar)
+    ]
+    result = PortfolioReplayEngine(
+        starting_cash=Decimal("20000"),
+        portfolio_policy=PortfolioPolicy(
+            max_symbol_exposure=Decimal("1"),
+            max_risk_per_trade=Decimal("1"),
+            max_total_risk=Decimal("1"),
+        ),
+        exchange=HistoricalExchange(FillPolicy(participation_rate=1)),
+        config_hash="4" * 64,
+    ).run(frames, BracketPolicy())
+    assert len(result.fills) == 2
+    assert result.fills[0].side == Side.BUY
+    assert result.fills[1].reason == "stop_intrabar"
+    assert result.fills[1].occurred_at == result.fills[0].occurred_at
+    assert any(
+        order.intent.kind == OrderKind.LIMIT and order.state == SimulationOrderState.CANCELLED
+        for order in result.final_orders
+    )
+
+
 def test_oco_stop_first_prevents_double_exit_when_bar_touches_both(simulation_time) -> None:
     bars = [
         SimulationBar(

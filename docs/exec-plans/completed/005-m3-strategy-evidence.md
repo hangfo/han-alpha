@@ -4,6 +4,11 @@ Status: COMPLETE
 Owner: Codex
 Created: 2026-07-18
 
+An authority/chronology amendment was completed before M4; see ADR 0005 and
+`006-m4-evidence-service.md`. It replaces in-memory budget and caller-reported
+promotion/counterfactual claims with persistent allocations, signed derived
+promotion and executed variants, and defines conservative same-bar protection.
+
 ## Objective
 
 Build a research process that preferentially rejects false strategies and emits

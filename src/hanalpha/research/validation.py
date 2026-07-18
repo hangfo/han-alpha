@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict
+
+from hanalpha.pit.models import require_aware
 
 
 class WalkForwardFold(BaseModel):
@@ -8,6 +12,36 @@ class WalkForwardFold(BaseModel):
 
     train_indices: tuple[int, ...]
     test_indices: tuple[int, ...]
+
+
+class LabelInterval(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    observation_id: str
+    information_start: datetime
+    label_end: datetime
+
+    def model_post_init(self, __context: object) -> None:
+        require_aware(self.information_start, "information_start")
+        require_aware(self.label_end, "label_end")
+        if self.label_end < self.information_start:
+            raise ValueError("label interval ends before it starts")
+
+
+def purge_overlapping_labels(
+    train: tuple[LabelInterval, ...],
+    test: tuple[LabelInterval, ...],
+) -> tuple[LabelInterval, ...]:
+    def overlaps(left: LabelInterval, right: LabelInterval) -> bool:
+        return (
+            left.information_start <= right.label_end and right.information_start <= left.label_end
+        )
+
+    return tuple(
+        candidate
+        for candidate in train
+        if not any(overlaps(candidate, test_item) for test_item in test)
+    )
 
 
 def rolling_walk_forward(

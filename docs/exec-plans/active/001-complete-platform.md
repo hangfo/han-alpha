@@ -1,6 +1,6 @@
 # Active execution plan: complete Han Alpha platform
 
-Status: ACTIVE; M3 complete, M4 is next
+Status: ACTIVE; M4 complete locally, M5 is next
 Owner: Codex
 Last updated: 2026-07-18
 
@@ -24,7 +24,7 @@ Codex must rerun and replace these statements with current command evidence.
 - [x] M1 point-in-time data and persistent contracts
 - [x] M2 deterministic portfolio replay and experiment registry
 - [x] M3 preregistered strategy baselines and statistical evidence
-- [ ] M4 LLM Evidence Service, caching, budgets and ablation
+- [x] M4 LLM Evidence Service, caching, budgets and ablation
 - [ ] M5 durable execution control plane and Fake Broker
 - [ ] M6 IBKR Paper integration and observation
 - [ ] M7 Ops Dashboard, observability and recovery operations
@@ -39,6 +39,7 @@ Record important decisions here with date, alternatives, and consequences. Do no
 - 2026-07-18: M1 frozen-fixture PIT kernel passed local and clean hash-locked verification. Real vendor data remains gated; M2 is a local portfolio replay/experiment milestone.
 - 2026-07-18: M2 deterministic portfolio replay and experiment lifecycle passed 110 tests at 80.14% branch coverage in local and clean hash-locked Python 3.12.13 environments. M3 may design preregistered strategy evidence, but real data acquisition remains separately gated.
 - 2026-07-18: M3 closed the replay truth gaps, added preregistered interpretable baselines and fail-closed statistical/promotion governance. Local verification passed 133 tests at 85.48% branch coverage; the live IBKR adapter is explicitly excluded because it is credential-gated M6 scope. M4 may add evidence-only LLM assistance without changing sizing, risk or Broker authority.
+- 2026-07-18: M3 authority amendment removed caller-reported promotion and descriptive counterfactuals, persisted atomic research allocations, and adopted adverse same-bar protection. M4 added a citation-bound, expiring, cached and budgeted Evidence Service with no Broker/sizing/risk authority. No real Provider call or real-data Alpha evaluation was performed. M5 is the next local milestone.
 
 ## Verification log
 
@@ -57,4 +58,9 @@ M1 evidence is maintained in `../completed/003-m1-pit-data-kernel.md`.
 
 M2 evidence is maintained in `../completed/004-m2-portfolio-backtest.md`.
 
-M3 evidence is maintained in `../completed/005-m3-strategy-evidence.md`. The next bounded milestone is M4 LLM Evidence Service; it must remain evidence-only and must not be conflated with execution or Broker integration.
+M3 evidence is maintained in `../completed/005-m3-strategy-evidence.md`; its
+authority amendment is recorded in ADR 0005.
+
+M4 evidence is maintained in `../completed/006-m4-evidence-service.md`. The next
+bounded milestone is M5 durable execution control plane and Fake Broker. M6
+IBKR connectivity remains separately credential-gated.

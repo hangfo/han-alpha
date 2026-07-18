@@ -53,7 +53,12 @@ class HistoricalExchange:
         self.policy = policy
 
     def match(
-        self, order: TrackedOrder, bar: SimulationBar, *, as_of: datetime
+        self,
+        order: TrackedOrder,
+        bar: SimulationBar,
+        *,
+        as_of: datetime,
+        same_bar_protection: bool = False,
     ) -> FillEvent | None:
         require_aware(as_of, "as_of")
         if order.state not in {
@@ -62,11 +67,19 @@ class HistoricalExchange:
         }:
             return None
         intent = order.intent
+        if same_bar_protection and not (
+            intent.reduce_only and intent.submitted_at == bar.available_at
+        ):
+            raise ValueError("same-bar matching is restricted to new reduce-only protection")
         if bar.instrument_id != intent.instrument_id:
             return None
-        if bar.source_revision != 1 or bar.event_time < intent.submitted_at:
+        if bar.source_revision != 1 or (
+            not same_bar_protection and bar.event_time < intent.submitted_at
+        ):
             return None
-        if bar.available_at > as_of or bar.available_at <= intent.submitted_at:
+        if bar.available_at > as_of or (
+            not same_bar_protection and bar.available_at <= intent.submitted_at
+        ):
             return None
         if bar.available_at < intent.earliest_fill_at:
             return None

@@ -17,13 +17,19 @@ from hanalpha.backtest import BacktestEngine
 from hanalpha.config import load_config
 from hanalpha.data.fixtures import run_fixture_pipeline
 from hanalpha.data.synthetic import SyntheticMarketDataProvider
-from hanalpha.experiments.models import ExperimentManifest
+from hanalpha.experiments.models import ExperimentManifest, WindowRole
 from hanalpha.experiments.registry import ExperimentRegistry
 from hanalpha.experiments.runner import ExperimentRunner
 from hanalpha.orchestrator import build_system
 from hanalpha.pit.catalog import PITCatalog
 from hanalpha.portfolio import Ledger
 from hanalpha.research.adapter import ResearchPolicyAdapter
+from hanalpha.research.protocol import (
+    DateWindow,
+    PreregisteredProtocol,
+    ResearchBudget,
+    SuccessCriteria,
+)
 from hanalpha.research.strategies import SlowTrendStrategy
 from hanalpha.simulation.engine import PortfolioReplayEngine
 from hanalpha.simulation.events import ReplayFrame, SimulationBar, canonical_hash
@@ -209,21 +215,69 @@ def backtest(
         )
         strategy = SlowTrendStrategy(fast_window=50, slow_window=200, quantity=10)
         policy = ResearchPolicyAdapter(strategy)
-        manifest = ExperimentManifest(
-            snapshot_id=snapshot_id,
-            code_hash=canonical_hash({"package": "han-alpha", "m3_schema": "1"}),
-            config_hash=engine_config_hash,
-            cost_policy_hash=fill_policy.policy_hash,
-            universe_hash=canonical_hash([symbol]),
-            metric_schema_version="2",
-            seed=provider.seed,
-            strategy_id=policy.name,
-            strategy_version=policy.version,
-            hypothesis="synthetic trend baseline validates mechanics; it is not alpha evidence",
-            parameters={"fast_window": 50, "slow_window": 200, "quantity": 10},
-        )
         registry = ExperimentRegistry(state / "experiments.sqlite3")
         try:
+            parameters = {"fast_window": 50, "slow_window": 200, "quantity": 10}
+            anchor = datetime(2020, 1, 1, tzinfo=UTC)
+            protocol = PreregisteredProtocol(
+                name="synthetic-trend-mechanics",
+                version="1",
+                researcher_id="hanalpha-cli",
+                hypothesis=(
+                    "synthetic trend baseline validates mechanics; it is not alpha evidence"
+                ),
+                snapshot_id=snapshot_id,
+                universe_hash=canonical_hash([symbol]),
+                feature_schema_hash=canonical_hash({"synthetic-bars": "1"}),
+                cost_policy_hash=fill_policy.policy_hash,
+                train=DateWindow(start=anchor, end=anchor + timedelta(days=100)),
+                validation=DateWindow(
+                    start=anchor + timedelta(days=101), end=anchor + timedelta(days=150)
+                ),
+                test=DateWindow(
+                    start=anchor + timedelta(days=151), end=anchor + timedelta(days=250)
+                ),
+                parameter_ranges={},
+                success=SuccessCriteria(
+                    minimum_oos_return=Decimal("0"),
+                    maximum_drawdown=Decimal("0.25"),
+                    minimum_dsr_probability=Decimal("0.95"),
+                    maximum_pbo=Decimal("0.20"),
+                    minimum_cost_stress_return=Decimal("0"),
+                    maximum_contribution_share=Decimal("0.35"),
+                    minimum_observations=60,
+                ),
+                budget=ResearchBudget(max_trials=8, used_trials=0),
+                benchmarks=("cash", "buy-and-hold"),
+                purge_bars=5,
+                embargo_bars=5,
+            )
+            registry.register_protocol(protocol)
+            allocation = registry.allocate_trial(
+                protocol.protocol_hash,
+                parameters=parameters,
+                window_role=WindowRole.TEST,
+                idempotency_key=f"synthetic:{symbol}:{bars}:{provider.seed}",
+                at=frames[-1].as_of,
+            )
+            manifest = ExperimentManifest(
+                snapshot_id=snapshot_id,
+                code_hash=canonical_hash({"package": "han-alpha", "m3_schema": "2"}),
+                config_hash=engine_config_hash,
+                cost_policy_hash=fill_policy.policy_hash,
+                universe_hash=protocol.universe_hash,
+                metric_schema_version="2",
+                seed=provider.seed,
+                strategy_id=policy.name,
+                strategy_version=policy.version,
+                hypothesis=protocol.hypothesis,
+                parameters=parameters,
+                protocol_hash=protocol.protocol_hash,
+                trial_allocation_id=allocation.allocation_id,
+                parameter_point_hash=allocation.parameter_point_hash,
+                window_role=allocation.window_role,
+                research_program_id=protocol.research_program_id,
+            )
             result = ExperimentRunner(registry, state / "artifacts").run(
                 manifest=manifest,
                 engine=engine,

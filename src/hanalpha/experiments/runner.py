@@ -76,6 +76,9 @@ class ExperimentRunner:
                 ),
                 equity_points=replay.equity_points,
                 fill_count=len(replay.fills),
+                journal_entries=replay.journal_entries,
+                cash_entries=replay.cash_entries,
+                position_lots=replay.position_lots,
             )
             directory = self.artifact_root / experiment_id
             digests = ResultBundleWriter().write(manifest, result, directory)

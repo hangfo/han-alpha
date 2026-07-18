@@ -19,7 +19,10 @@ def test_default_backtest_registers_deterministic_m3_artifacts(tmp_path) -> None
     assert experiment_id == second.output.split("experiment_id=")[1].split()[0]
     directory = state / "artifacts" / experiment_id
     assert {path.name for path in directory.iterdir()} == {
+        "cash-ledger.jsonl",
+        "journal.jsonl",
         "manifest.json",
+        "position-lots.jsonl",
         "report.html",
         "result.json",
     }

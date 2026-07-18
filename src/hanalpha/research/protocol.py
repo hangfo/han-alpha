@@ -71,6 +71,7 @@ class PreregisteredProtocol(BaseModel):
 
     name: str = Field(min_length=1)
     version: str = Field(min_length=1)
+    researcher_id: str = Field(min_length=1)
     hypothesis: str = Field(min_length=1)
     snapshot_id: str = Field(pattern=HASH_PATTERN)
     universe_hash: str = Field(pattern=HASH_PATTERN)
@@ -101,6 +102,19 @@ class PreregisteredProtocol(BaseModel):
         budget.pop("used_trials", None)
         payload["budget"] = budget
         return canonical_hash(payload)
+
+    @property
+    def research_program_id(self) -> str:
+        return canonical_hash(
+            {
+                "name": self.name,
+                "researcher_id": self.researcher_id,
+                "hypothesis": self.hypothesis,
+                "snapshot_id": self.snapshot_id,
+                "universe_hash": self.universe_hash,
+                "feature_schema_hash": self.feature_schema_hash,
+            }
+        )
 
     def consume_trial(self) -> PreregisteredProtocol:
         if self.budget.remaining_trials <= 0:

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from hanalpha.metrics.portfolio import EquityPoint, PortfolioMetrics
 from hanalpha.pit.models import HASH_PATTERN, require_aware
 from hanalpha.simulation.events import canonical_hash
+from hanalpha.simulation.portfolio import CashEntry, JournalEntry, PositionLot
 
 
 class TrialStatus(StrEnum):
@@ -18,6 +19,31 @@ class TrialStatus(StrEnum):
     FAILED = "failed"
     ABORTED = "aborted"
     PROMOTED = "promoted"
+
+
+class WindowRole(StrEnum):
+    TRAIN = "train"
+    VALIDATION = "validation"
+    TEST = "test"
+    COUNTERFACTUAL = "counterfactual"
+
+
+class TrialAllocation(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    allocation_id: str = Field(pattern=HASH_PATTERN)
+    protocol_hash: str = Field(pattern=HASH_PATTERN)
+    research_program_id: str = Field(pattern=HASH_PATTERN)
+    trial_number: int = Field(gt=0)
+    parameter_point_hash: str = Field(pattern=HASH_PATTERN)
+    window_role: WindowRole
+    allocated_at: datetime
+    experiment_id: str | None = Field(default=None, pattern=HASH_PATTERN)
+
+    @model_validator(mode="after")
+    def validate_time(self) -> TrialAllocation:
+        require_aware(self.allocated_at, "allocated_at")
+        return self
 
 
 class ExperimentManifest(BaseModel):
@@ -35,6 +61,17 @@ class ExperimentManifest(BaseModel):
     hypothesis: str = Field(min_length=1)
     parameters: dict[str, Any]
     counterfactual_of: str | None = Field(default=None, pattern=HASH_PATTERN)
+    protocol_hash: str = Field(pattern=HASH_PATTERN)
+    trial_allocation_id: str = Field(pattern=HASH_PATTERN)
+    parameter_point_hash: str = Field(pattern=HASH_PATTERN)
+    window_role: WindowRole
+    research_program_id: str = Field(pattern=HASH_PATTERN)
+
+    @model_validator(mode="after")
+    def validate_parameter_point(self) -> ExperimentManifest:
+        if self.parameter_point_hash != canonical_hash(self.parameters):
+            raise ValueError("parameter_point_hash does not match parameters")
+        return self
 
     @property
     def experiment_id(self) -> str:
@@ -82,6 +119,9 @@ class ExperimentResult(BaseModel):
     metrics: PortfolioMetrics
     equity_points: list[EquityPoint]
     fill_count: int = Field(ge=0)
+    journal_entries: list[JournalEntry] = Field(default_factory=list)
+    cash_entries: list[CashEntry] = Field(default_factory=list)
+    position_lots: list[PositionLot] = Field(default_factory=list)
 
     @property
     def result_hash(self) -> str:
