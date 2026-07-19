@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-07-19 — M5 review hardening and M6 read-only observer kernel
+
+- Unified new-risk safety under durable Freeze Tickets, hardened fencing and Unknown Submission recovery, removed in-memory pending approvals, and added formal approval API/CLI receipts.
+- Replaced Fake Broker floating cash updates with exact Decimal text arithmetic; reconciled cash/account fields and per-parent STOP/TARGET protection graphs.
+- Added IBKR read-only session epochs, raw callback fact tape, completeness certificates, native-identity reducer and shadow execution reality-gap accounting.
+- Real IBKR Paper connectivity and all Broker writes remain blocked and were not attempted.
+
 ## Unreleased - M3 preregistered strategy evidence (2026-07-18)
 
 ### Added

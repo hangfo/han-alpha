@@ -17,6 +17,12 @@ from hanalpha.backtest import BacktestEngine
 from hanalpha.config import load_config
 from hanalpha.data.fixtures import run_fixture_pipeline
 from hanalpha.data.synthetic import SyntheticMarketDataProvider
+from hanalpha.execution.control_store import DurableExecutionStore
+from hanalpha.execution.fake_broker import DurableFakeBroker
+from hanalpha.execution.ibkr import IBKRBroker
+from hanalpha.execution.ibkr_observer import IBKRFactStore
+from hanalpha.execution.reconciliation import Reconciler
+from hanalpha.execution.worker import ExecutionWorker
 from hanalpha.experiments.models import ExperimentManifest, WindowRole
 from hanalpha.experiments.registry import ExperimentRegistry
 from hanalpha.experiments.runner import ExperimentRunner
@@ -41,6 +47,126 @@ app = typer.Typer(no_args_is_help=True, help="Han Alpha trading system CLI")
 pit_app = typer.Typer(no_args_is_help=True, help="Point-in-time fixture data tools")
 app.add_typer(pit_app, name="pit")
 console = Console()
+
+
+@app.command("execution-reconcile")
+def execution_reconcile(
+    control: Annotated[Path, typer.Option("--control")],
+    broker_state: Annotated[Path, typer.Option("--broker-state")],
+) -> None:
+    """Reconcile the durable control plane against the local fault-injecting broker."""
+    at = datetime.now(UTC)
+    store = DurableExecutionStore(control)
+    broker = DurableFakeBroker(broker_state)
+    try:
+        report = Reconciler(store).reconcile(broker.snapshot(at=at), at=at)
+        console.print_json(report.model_dump_json(indent=2))
+    finally:
+        broker.close()
+        store.close()
+
+
+@app.command("execution-dispatch")
+def execution_dispatch(
+    control: Annotated[Path, typer.Option("--control")],
+    broker_state: Annotated[Path, typer.Option("--broker-state")],
+    owner: Annotated[str, typer.Option("--owner")] = "local-worker",
+) -> None:
+    """Reconcile then dispatch one local Fake-Broker outbox command."""
+    at = datetime.now(UTC)
+    store = DurableExecutionStore(control)
+    broker = DurableFakeBroker(broker_state)
+    try:
+        report = Reconciler(store).reconcile(broker.snapshot(at=at), at=at)
+        if report.status not in {"CONVERGED", "DEGRADED"}:
+            raise typer.BadParameter(f"reconciliation blocked dispatch: {report.status}")
+        lease = store.acquire_lease(
+            "broker-writer", owner_id=owner, at=at, ttl=timedelta(seconds=30)
+        )
+        dispatched = ExecutionWorker(store, broker, lease).dispatch_once(at=at)
+        console.print(f"dispatched={str(dispatched).lower()} fencing_token={lease.fencing_token}")
+    finally:
+        broker.close()
+        store.close()
+
+
+@app.command("execution-approvals")
+def execution_approvals(
+    control: Annotated[Path, typer.Option("--control")],
+) -> None:
+    """List durable approval-pending intents without exposing account identifiers."""
+    store = DurableExecutionStore(control)
+    try:
+        rows = [
+            {
+                "intent_id": row["intent_id"],
+                "decision_id": row["decision_id"],
+                "status": row["status"],
+                "version": row["version"],
+            }
+            for row in store.pending_approvals()
+        ]
+        console.print_json(json.dumps(rows, sort_keys=True))
+    finally:
+        store.close()
+
+
+@app.command("execution-approve")
+def execution_approve(
+    control: Annotated[Path, typer.Option("--control")],
+    broker_state: Annotated[Path, typer.Option("--broker-state")],
+    intent_id: Annotated[str, typer.Option("--intent-id")],
+    actor: Annotated[str, typer.Option("--actor")],
+) -> None:
+    """Persist an immutable approval receipt for one exact intent specification."""
+    store = DurableExecutionStore(control)
+    broker = DurableFakeBroker(broker_state)
+    try:
+        report = Reconciler(store).reconcile(
+            broker.snapshot(at=datetime.now(UTC)), at=datetime.now(UTC)
+        )
+        if report.status not in {"CONVERGED", "DEGRADED"}:
+            raise typer.BadParameter(f"reconciliation blocked approval: {report.status}")
+        approval_id = store.approve(intent_id, actor_id=actor, at=datetime.now(UTC))
+        console.print(f"approval_id={approval_id} status=APPROVED")
+    finally:
+        broker.close()
+        store.close()
+
+
+@app.command("ibkr-observe")
+def ibkr_observe(
+    state_path: Annotated[Path, typer.Option("--state")],
+    timeout: Annotated[float, typer.Option("--timeout", min=1, max=120)] = 15,
+) -> None:
+    """Capture a read-only IBKR Paper fact tape and completeness certificate."""
+
+    async def _run() -> None:
+        _, secrets = load_config()
+        if secrets.ibkr_port not in {4002, 7497}:
+            raise typer.BadParameter("IBKR observer only permits Paper ports 4002 or 7497")
+        broker = IBKRBroker(
+            host=secrets.ibkr_host,
+            port=secrets.ibkr_port,
+            client_id=secrets.ibkr_client_id,
+            account=secrets.ibkr_account,
+        )
+        store = IBKRFactStore(state_path)
+        try:
+            await broker.connect(timeout=timeout)
+            certificate, model = await broker.observe_read_only(store, timeout=timeout)
+            console.print(
+                f"complete={str(certificate.complete).lower()} "
+                f"certificate_id={certificate.certificate_id} "
+                f"orders={len(model.orders)} executions={len(model.executions)} "
+                f"positions={len(model.positions)}"
+            )
+        finally:
+            if hasattr(broker.app, "disconnect"):
+                broker.app.disconnect()
+            store.close()
+
+    asyncio.run(_run())
 
 
 @pit_app.command("ingest-fixture")

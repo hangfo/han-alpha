@@ -17,6 +17,7 @@ class ExecutionWorker:
         self.store = store
         self.broker = broker
         self.lease = lease
+        self.broker.advance_fence(lease.fencing_token)
 
     def dispatch_once(self, *, at: datetime) -> bool:
         claimed = self.store.claim_next(self.lease, at=at)
@@ -24,6 +25,7 @@ class ExecutionWorker:
             return False
         command, intent = claimed
         try:
+            self.store.validate_lease(self.lease, at=at)
             events = self.broker.submit(intent, fencing_token=self.lease.fencing_token, at=at)
         except BrokerSubmissionUnknown as exc:
             self.store.mark_submission_unknown(command.command_id, at=at, reason=str(exc))

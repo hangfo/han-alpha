@@ -1,6 +1,6 @@
 # Active execution plan: complete Han Alpha platform
 
-Status: ACTIVE; M5 complete locally, M6 is next
+Status: ACTIVE; M5 hardened, M6 read-only kernel complete locally and Paper burn-in blocked
 Owner: Codex
 Last updated: 2026-07-19
 
@@ -41,6 +41,7 @@ Record important decisions here with date, alternatives, and consequences. Do no
 - 2026-07-18: M3 closed the replay truth gaps, added preregistered interpretable baselines and fail-closed statistical/promotion governance. Local verification passed 133 tests at 85.48% branch coverage; the live IBKR adapter is explicitly excluded because it is credential-gated M6 scope. M4 may add evidence-only LLM assistance without changing sizing, risk or Broker authority.
 - 2026-07-18: M3 authority amendment removed caller-reported promotion and descriptive counterfactuals, persisted atomic research allocations, and adopted adverse same-bar protection. M4 added a citation-bound, expiring, cached and budgeted Evidence Service with no Broker/sizing/risk authority. No real Provider call or real-data Alpha evaluation was performed. M5 is the next local milestone.
 - 2026-07-19: M4 audit amendments fixed the raw Responses boundary, backend citation resolution, review binding, ablation arithmetic, cache/audit scope and no-trade promotion. M5 added the durable capsule/reservation/outbox/inbox/single-writer/Fake-Broker/reconciliation control plane and removed direct new-exposure Broker submission from the runtime. No real Provider or Broker call was made. M6 is authorized only for explicit IBKR Paper integration and observation.
+- 2026-07-19: M5 review hardening unified durable freeze authority, closed fencing/Unknown/cash/protection/account-read gaps and removed in-memory pending orders. M6-A through M6-E now have a local read-only fact-tape, completeness-certificate, reducer and shadow-gap kernel. Real Paper burn-in and M6-F remain blocked; no Broker write was made.
 
 ## Verification log
 
@@ -66,5 +67,5 @@ M4 evidence is maintained in `../completed/006-m4-evidence-service.md`. The next
 audit amendment is in `../../v2-plan/12_M4_M5_AUDIT_INTEGRATION_DECISIONS_ZH.md`.
 
 M5 evidence is maintained in `../completed/007-m5-durable-execution.md`. The next
-bounded milestone is M6 IBKR Paper integration; connectivity and real callbacks
-remain separately credential-gated.
+bounded milestone is tracked in `008-m6-ibkr-observation.md`; real connectivity,
+callback burn-in, durable cancel and the first Paper Manual order remain blocked.

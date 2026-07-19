@@ -8,12 +8,20 @@ from typing import Any
 
 from hanalpha.domain.enums import OrderStatus, Side
 from hanalpha.domain.models import AccountSnapshot, OrderEvent, OrderRequest, Position, Quote
+from hanalpha.execution.ibkr_observer import (
+    IBKRCallbackCollector,
+    IBKRFactReducer,
+    IBKRFactStore,
+    IBKRFactType,
+    IBKRReadModel,
+    SnapshotCompletenessCertificate,
+)
 from hanalpha.runtime.capabilities import BrokerWriteCapability, require_broker_write
 
 try:
     from ibapi.client import EClient
     from ibapi.contract import Contract
-    from ibapi.execution import Execution
+    from ibapi.execution import Execution, ExecutionFilter
     from ibapi.order import Order
     from ibapi.wrapper import EWrapper
 
@@ -29,6 +37,7 @@ except ImportError:  # pragma: no cover - depends on local official TWS API inst
     Contract = Any
     Order = Any
     Execution = Any
+    ExecutionFilter = Any
     IBAPI_AVAILABLE = False
 
 
@@ -42,13 +51,26 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
         self.account_values: dict[str, float] = {}
         self.connected_event = threading.Event()
         self.lock = threading.RLock()
+        self.observer: IBKRCallbackCollector | None = None
+
+    def _observe(
+        self, kind: IBKRFactType, payload: dict[str, Any] | None = None, *, key: str | None = None
+    ) -> None:
+        if self.observer is not None:
+            self.observer.record(kind, payload, identity_key=key, at=datetime.now(UTC))
 
     def nextValidId(self, orderId: int) -> None:
         with self.lock:
             self.next_order_id = orderId
         self.connected_event.set()
+        self._observe(IBKRFactType.NEXT_VALID_ID, {"order_id": orderId}, key=str(orderId))
 
     def error(self, reqId: int, errorCode: int, errorString: str, advancedOrderRejectJson: str = "") -> None:
+        self._observe(
+            IBKRFactType.ERROR,
+            {"request_id": reqId, "code": errorCode, "message": errorString},
+            key=f"{reqId}:{errorCode}:{errorString}",
+        )
         if reqId >= 0:
             self.order_events.append(
                 OrderEvent(
@@ -73,6 +95,21 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
         whyHeld: str,
         mktCapPrice: float,
     ) -> None:
+        if self.observer is not None:
+            self.observer.order_status(
+                orderId,
+                {
+                    "status": status,
+                    "filled": str(filled),
+                    "remaining": str(remaining),
+                    "avg_fill_price": str(avgFillPrice),
+                    "perm_id": permId,
+                    "parent_id": parentId,
+                    "client_id": clientId,
+                    "why_held": whyHeld,
+                },
+                at=datetime.now(UTC),
+            )
         mapping = {
             "PendingSubmit": OrderStatus.SUBMITTING,
             "PreSubmitted": OrderStatus.SUBMITTED,
@@ -100,6 +137,22 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
         )
 
     def execDetails(self, reqId: int, contract: Contract, execution: Execution) -> None:
+        if self.observer is not None:
+            self.observer.execution(
+                str(execution.execId),
+                {
+                    "request_id": reqId,
+                    "order_id": int(execution.orderId),
+                    "perm_id": int(getattr(execution, "permId", 0)),
+                    "client_id": int(getattr(execution, "clientId", 0)),
+                    "symbol": str(contract.symbol),
+                    "shares": str(execution.shares),
+                    "price": str(execution.price),
+                    "side": str(getattr(execution, "side", "")),
+                    "time": str(getattr(execution, "time", "")),
+                },
+                at=datetime.now(UTC),
+            )
         internal_order_id = self.broker_to_internal.get(execution.orderId, str(execution.orderId))
         self.order_events.append(
             OrderEvent(
@@ -114,6 +167,17 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
         )
 
     def position(self, account: str, contract: Contract, position: float, avgCost: float) -> None:
+        self._observe(
+            IBKRFactType.POSITION,
+            {
+                "account": account,
+                "con_id": int(getattr(contract, "conId", 0)),
+                "symbol": str(contract.symbol),
+                "position": str(position),
+                "average_cost": str(avgCost),
+            },
+            key=f"{account}:{getattr(contract, 'conId', 0)}:{contract.symbol}",
+        )
         quantity = int(position)
         if quantity == 0:
             self.positions_cache.pop(contract.symbol, None)
@@ -126,10 +190,78 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
         )
 
     def accountSummary(self, reqId: int, account: str, tag: str, value: str, currency: str) -> None:
+        self._observe(
+            IBKRFactType.ACCOUNT_VALUE,
+            {"request_id": reqId, "account": account, "tag": tag, "value": value, "currency": currency},
+            key=f"{account}:{tag}:{currency}",
+        )
         try:
             self.account_values[tag] = float(value)
         except ValueError:
             return
+
+    def connectAck(self) -> None:
+        self._observe(IBKRFactType.CONNECTION, {"connected": True}, key="connected")
+
+    def currentTime(self, time: int) -> None:
+        self._observe(IBKRFactType.SERVER_TIME, {"unix_time": time}, key=str(time))
+
+    def managedAccounts(self, accountsList: str) -> None:
+        accounts = [item for item in accountsList.split(",") if item]
+        self._observe(
+            IBKRFactType.MANAGED_ACCOUNTS,
+            {"account_count": len(accounts)},
+            key=canonical_account_count(accounts),
+        )
+
+    def accountSummaryEnd(self, reqId: int) -> None:
+        self._observe(IBKRFactType.ACCOUNT_END, {"request_id": reqId}, key=str(reqId))
+
+    def openOrder(self, orderId: int, contract: Contract, order: Order, orderState: Any) -> None:
+        self._observe(
+            IBKRFactType.OPEN_ORDER,
+            {
+                "order_id": orderId,
+                "perm_id": int(getattr(order, "permId", 0)),
+                "parent_id": int(getattr(order, "parentId", 0)),
+                "client_id": int(getattr(order, "clientId", 0)),
+                "order_ref": str(getattr(order, "orderRef", "")),
+                "symbol": str(contract.symbol),
+                "action": str(getattr(order, "action", "")),
+                "quantity": str(getattr(order, "totalQuantity", "0")),
+                "status": str(getattr(orderState, "status", "")),
+            },
+            key=f"{self.client_id if hasattr(self, 'client_id') else 0}:{orderId}:{getattr(order, 'permId', 0)}",
+        )
+
+    def openOrderEnd(self) -> None:
+        self._observe(IBKRFactType.OPEN_ORDER_END, {}, key="end")
+
+    def positionEnd(self) -> None:
+        self._observe(IBKRFactType.POSITION_END, {}, key="end")
+
+    def execDetailsEnd(self, reqId: int) -> None:
+        self._observe(IBKRFactType.EXECUTION_END, {"request_id": reqId}, key=str(reqId))
+
+    def commissionReport(self, commissionReport: Any) -> None:
+        if self.observer is not None:
+            self.observer.commission(
+                str(commissionReport.execId),
+                {
+                    "commission": str(commissionReport.commission),
+                    "currency": str(commissionReport.currency),
+                    "realized_pnl": str(getattr(commissionReport, "realizedPNL", "")),
+                },
+                at=datetime.now(UTC),
+            )
+
+    def connectionClosed(self) -> None:
+        self._observe(IBKRFactType.DISCONNECT, {}, key="closed")
+
+
+def canonical_account_count(accounts: list[str]) -> str:
+    """Redacted identity: never persist account identifiers in the observer tape."""
+    return f"accounts:{len(accounts)}"
 
 
 class IBKRBroker:
@@ -163,6 +295,51 @@ class IBKRBroker:
             raise TimeoutError("IBKR nextValidId was not received")
         self.app.reqPositions()
         self.app.reqAccountSummary(9001, "All", "NetLiquidation,TotalCashValue,BuyingPower")
+
+    async def observe_read_only(
+        self, store: IBKRFactStore, *, timeout: float = 10
+    ) -> tuple[SnapshotCompletenessCertificate, IBKRReadModel]:
+        """Request account/order/position/execution truth without any broker write call."""
+        if self.port not in {4002, 7497}:
+            raise RuntimeError("read-only observer only permits standard IBKR paper ports")
+        session_id = store.start_session(
+            host=self.host,
+            port=self.port,
+            client_id=self.client_id,
+            at=datetime.now(UTC),
+        )
+        collector = IBKRCallbackCollector(store, session_id)
+        self.app.observer = collector
+        if await self.is_connected():
+            collector.record(
+                IBKRFactType.CONNECTION,
+                {"connected": True},
+                identity_key="connected",
+            )
+            if self.app.next_order_id is not None:
+                collector.record(
+                    IBKRFactType.NEXT_VALID_ID,
+                    {"order_id": self.app.next_order_id},
+                    identity_key=str(self.app.next_order_id),
+                )
+        self.app.reqCurrentTime()
+        self.app.reqManagedAccts()
+        self.app.reqAccountSummary(
+            9101,
+            "All",
+            "NetLiquidation,TotalCashValue,SettledCash,BuyingPower,AccruedCash",
+        )
+        self.app.reqAllOpenOrders()
+        self.app.reqPositions()
+        self.app.reqExecutions(9102, ExecutionFilter())
+        deadline = time.monotonic() + timeout
+        certificate = collector.certificate(at=datetime.now(UTC))
+        while not certificate.complete and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+            certificate = collector.certificate(at=datetime.now(UTC))
+            if certificate.critical_errors or certificate.disconnected:
+                break
+        return certificate, IBKRFactReducer.reduce(store.facts(session_id))
 
     async def is_connected(self) -> bool:
         return bool(self.app.isConnected())

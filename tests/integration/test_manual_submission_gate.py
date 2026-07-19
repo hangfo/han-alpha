@@ -25,6 +25,8 @@ async def test_paper_manual_never_auto_submits(tmp_path, risk_config, now) -> No
     )
     runtime_access = build_runtime_access(gated, SecretSettings(_env_file=None))
     ledger = Ledger(tmp_path / "gated.sqlite3")
+    execution_store = DurableExecutionStore(tmp_path / "execution.sqlite3")
+    execution_store.unfreeze_after_reconciliation(at=now)
     system = TradingSystem(
         config=gated,
         provider=SyntheticMarketDataProvider(gated.bar_interval_minutes),
@@ -33,16 +35,16 @@ async def test_paper_manual_never_auto_submits(tmp_path, risk_config, now) -> No
         evidence_service=EvidenceService(
             EvidenceStore(tmp_path / "evidence.sqlite3"), DeterministicEvidenceExtractor()
         ),
-        execution_store=DurableExecutionStore(tmp_path / "execution.sqlite3"),
+        execution_store=execution_store,
         runtime_access=runtime_access,
         clock=FixedDecisionClock(now),
     )
     # Run enough deterministic cycles to reach at least one risk-approved candidate.
     for _ in range(20):
         result = await system.run_cycle()
-        if system.pending_orders:
+        if execution_store.pending_approval_count():
             break
-    assert system.pending_orders
+    assert execution_store.pending_approval_count() > 0
     snapshot = await system.broker.get_account_snapshot()
     assert not snapshot.positions
     assert any(event["status"] == "PROPOSED" for row in result["orders"] for event in row["events"])

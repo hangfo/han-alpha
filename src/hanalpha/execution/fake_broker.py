@@ -11,6 +11,7 @@ from hanalpha.execution.control_models import (
     BrokerEvent,
     BrokerEventType,
     BrokerOrderTruth,
+    BrokerProtectionTruth,
     BrokerSnapshot,
     ExecutionIntent,
 )
@@ -87,6 +88,11 @@ class DurableFakeBroker:
                 "INSERT INTO scenario_queue(scenario) VALUES (?)",
                 ((scenario.value,) for scenario in scenarios),
             )
+
+    def advance_fence(self, fencing_token: int) -> None:
+        """Publish a newly acquired lease before it can submit any order."""
+        with self.connection:
+            self._accept_fencing_token(fencing_token)
 
     def submit(
         self, intent: ExecutionIntent, *, fencing_token: int, at: datetime
@@ -238,9 +244,12 @@ class DurableFakeBroker:
                 at=at,
                 commission=amount,
             )
+            meta = self.connection.execute(
+                "SELECT cash FROM broker_meta WHERE singleton=1"
+            ).fetchone()
             self.connection.execute(
-                "UPDATE broker_meta SET cash=CAST(cash AS REAL)-? WHERE singleton=1",
-                (float(amount),),
+                "UPDATE broker_meta SET cash=? WHERE singleton=1",
+                (str(Decimal(meta["cash"]) - amount),),
             )
             return event
 
@@ -255,6 +264,9 @@ class DurableFakeBroker:
                 quantity=ExecutionIntent.model_validate_json(row["intent_json"]).quantity,
                 filled_quantity=int(row["filled_quantity"]),
                 status=row["status"],
+                protection_quantity=min(
+                    int(row["protection_quantity"]), int(row["filled_quantity"])
+                ),
             )
             for row in self.connection.execute(
                 "SELECT * FROM broker_orders ORDER BY broker_order_id"
@@ -279,13 +291,32 @@ class DurableFakeBroker:
                 "SELECT event_json FROM broker_events ORDER BY sequence"
             )
         )
+        protection_orders = tuple(
+            BrokerProtectionTruth(
+                protection_order_id=f"{row['broker_order_id']}:{kind.lower()}",
+                parent_client_order_key=row["client_order_key"],
+                protection_type=kind,
+                quantity=min(int(row["protection_quantity"]), int(row["filled_quantity"])),
+            )
+            for row in self.connection.execute(
+                """SELECT broker_order_id, client_order_key, protection_quantity, filled_quantity
+                   FROM broker_orders WHERE filled_quantity>0 AND protection_quantity>0"""
+            )
+            for kind in ("STOP", "TARGET")
+        )
         return BrokerSnapshot(
             as_of=at,
             cash=Decimal(meta["cash"]),
+            settled_cash=Decimal(meta["cash"]),
+            buying_power=Decimal(meta["cash"]),
+            accrued_cash=Decimal("0"),
+            base_currency="USD",
+            currency_balances={"USD": Decimal(meta["cash"])},
             orders=orders,
             positions=positions,
             protections=protections,
             events=events,
+            protection_orders=protection_orders,
         )
 
     def inject_broker_only_order(self, intent: ExecutionIntent, *, at: datetime) -> None:
@@ -346,9 +377,12 @@ class DurableFakeBroker:
             (intent.instrument_id, signed),
         )
         cash_delta = -(price * actual) if intent.side == Side.BUY else price * actual
+        meta = self.connection.execute(
+            "SELECT cash FROM broker_meta WHERE singleton=1"
+        ).fetchone()
         self.connection.execute(
-            "UPDATE broker_meta SET cash=CAST(cash AS REAL)+? WHERE singleton=1",
-            (float(cash_delta),),
+            "UPDATE broker_meta SET cash=? WHERE singleton=1",
+            (str(Decimal(meta["cash"]) + cash_delta),),
         )
         return event
 

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
 from hanalpha.execution.control_models import (
     BrokerEvent,
     BrokerEventType,
+    BrokerSnapshot,
     DecisionCapsule,
     ExecutionIntent,
     ExecutionLease,
@@ -91,6 +92,16 @@ class DurableExecutionStore:
               singleton INTEGER PRIMARY KEY CHECK(singleton=1), frozen INTEGER NOT NULL,
               reason TEXT NOT NULL, updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS freeze_tickets (
+              ticket_id TEXT PRIMARY KEY, reason_code TEXT NOT NULL, severity TEXT NOT NULL,
+              source TEXT NOT NULL, created_at TEXT NOT NULL, resolved_at TEXT,
+              resolution_evidence TEXT
+            );
+            CREATE TABLE IF NOT EXISTS broker_account_baseline (
+              singleton INTEGER PRIMARY KEY CHECK(singleton=1), cash TEXT NOT NULL,
+              buying_power TEXT, settled_cash TEXT, accrued_cash TEXT,
+              currency_balances_json TEXT NOT NULL, snapshot_as_of TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS reconciliation_runs (
               run_id TEXT PRIMARY KEY, started_at TEXT NOT NULL, completed_at TEXT,
               status TEXT NOT NULL, summary_json TEXT
@@ -115,10 +126,37 @@ class DurableExecutionStore:
             );
             INSERT OR IGNORE INTO control_state VALUES (1, 1, 'startup_reconciliation_required',
               '1970-01-01T00:00:00+00:00');
+            INSERT OR IGNORE INTO freeze_tickets VALUES (
+              'startup-reconciliation', 'STARTUP_RECONCILIATION', 'BLOCKING', 'system',
+              '1970-01-01T00:00:00+00:00', NULL, NULL
+            );
             INSERT OR IGNORE INTO cash_projection VALUES (1, '0', '0');
             """
         )
+        freeze_schema = self.connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='freeze_tickets'"
+        ).fetchone()["sql"]
+        if "UNIQUE(reason_code, source, resolved_at)" in freeze_schema:
+            self.connection.executescript(
+                """
+                ALTER TABLE freeze_tickets RENAME TO freeze_tickets_legacy;
+                CREATE TABLE freeze_tickets (
+                  ticket_id TEXT PRIMARY KEY, reason_code TEXT NOT NULL, severity TEXT NOT NULL,
+                  source TEXT NOT NULL, created_at TEXT NOT NULL, resolved_at TEXT,
+                  resolution_evidence TEXT
+                );
+                INSERT INTO freeze_tickets SELECT * FROM freeze_tickets_legacy;
+                DROP TABLE freeze_tickets_legacy;
+                """
+            )
         self.connection.commit()
+        if not self.connection.execute(
+            """SELECT 1 FROM freeze_tickets WHERE reason_code='STARTUP_RECONCILIATION'
+               AND source='system' AND resolved_at IS NULL"""
+        ).fetchone():
+            self.open_freeze_ticket(
+                "STARTUP_RECONCILIATION", source="system", at=datetime.now(UTC)
+            )
 
     def close(self) -> None:
         self.connection.close()
@@ -146,6 +184,13 @@ class DurableExecutionStore:
             raise ExecutionInvariantError("intent does not bind to active reservation")
         try:
             self.connection.execute("BEGIN IMMEDIATE")
+            tickets = self.connection.execute(
+                "SELECT reason_code FROM freeze_tickets WHERE resolved_at IS NULL AND severity='BLOCKING'"
+            ).fetchall()
+            if tickets:
+                raise ExecutionInvariantError(
+                    "new risk is frozen: " + ",".join(row["reason_code"] for row in tickets)
+                )
             active_statuses = (
                 ReservationStatus.ACTIVE.value,
                 ReservationStatus.PARTIALLY_CONSUMED.value,
@@ -233,6 +278,11 @@ class DurableExecutionStore:
     def approve(self, intent_id: str, *, actor_id: str, at: datetime) -> str:
         try:
             self.connection.execute("BEGIN IMMEDIATE")
+            blocking = self.active_freeze_reasons()
+            if blocking:
+                raise ExecutionInvariantError(
+                    "approval is frozen: " + ",".join(blocking)
+                )
             row = self._intent_row(intent_id)
             if row["status"] not in {
                 ExecutionStatus.APPROVAL_PENDING.value,
@@ -253,6 +303,12 @@ class DurableExecutionStore:
                 "intent_id": intent_id,
                 "actor_id": actor_id,
                 "approved_at": at.isoformat(),
+                "approval_expires_at": reservation_model.expires_at.isoformat(),
+                "intent_spec_hash": canonical_hash(
+                    ExecutionIntent.model_validate_json(row["intent_json"])
+                ),
+                "reservation_hash": canonical_hash(reservation_model),
+                "projection_version": int(row["version"]),
             }
             approval_id = canonical_hash(approval)
             existing = self.connection.execute(
@@ -316,6 +372,18 @@ class DurableExecutionStore:
         except BaseException:
             self.connection.rollback()
             raise
+
+    def validate_lease(self, lease: ExecutionLease, *, at: datetime) -> None:
+        current = self.connection.execute(
+            "SELECT * FROM execution_leases WHERE lease_name=?", (lease.lease_name,)
+        ).fetchone()
+        if (
+            current is None
+            or current["owner_id"] != lease.owner_id
+            or int(current["fencing_token"]) != lease.fencing_token
+            or datetime.fromisoformat(current["expires_at"]) <= at
+        ):
+            raise ExecutionInvariantError("stale execution fencing token")
 
     def claim_next(
         self, lease: ExecutionLease, *, at: datetime
@@ -436,16 +504,39 @@ class DurableExecutionStore:
             self.connection.rollback()
             raise
 
-    def resolve_unknown_at_broker(self, client_order_key: str, *, at: datetime) -> None:
+    def resolve_unknown_at_broker(
+        self,
+        client_order_key: str,
+        *,
+        broker_order_id: str,
+        at: datetime,
+    ) -> None:
         with self.connection:
             row = self.connection.execute(
-                "SELECT command_id FROM outbox_commands WHERE client_order_key=? AND status='UNKNOWN'",
+                """SELECT o.command_id, o.intent_id FROM outbox_commands o
+                   WHERE o.client_order_key=? AND o.status='UNKNOWN'""",
                 (client_order_key,),
             ).fetchone()
             if row is not None:
                 self.connection.execute(
                     "UPDATE outbox_commands SET status='DELIVERED', delivered_at=? WHERE command_id=?",
                     (at.isoformat(), row["command_id"]),
+                )
+                self.connection.execute(
+                    """UPDATE execution_intents SET status=?, broker_order_id=?, version=version+1
+                       WHERE intent_id=? AND status=?""",
+                    (
+                        ExecutionStatus.ACKNOWLEDGED.value,
+                        broker_order_id,
+                        row["intent_id"],
+                        ExecutionStatus.SUBMISSION_UNKNOWN.value,
+                    ),
+                )
+                self._append_order_event(
+                    row["intent_id"],
+                    "BROKER_ORDER_DISCOVERED",
+                    at,
+                    {"broker_order_id": broker_order_id},
                 )
 
     def requeue_unknown_absent_at_broker(
@@ -467,8 +558,8 @@ class DurableExecutionStore:
                 if row["claimed_at"] is not None
                 else datetime.min.replace(tzinfo=snapshot_as_of.tzinfo)
             )
-            if snapshot_as_of < claimed_at:
-                raise ExecutionInvariantError("broker snapshot predates uncertain submission")
+            if snapshot_as_of <= claimed_at:
+                raise ExecutionInvariantError("broker snapshot does not post-date uncertain submission")
             self.connection.execute(
                 """UPDATE outbox_commands SET status='PENDING', fencing_token=NULL,
                    claimed_at=NULL, delivered_at=NULL WHERE command_id=?""",
@@ -518,25 +609,26 @@ class DurableExecutionStore:
                 self.freeze("broker_only_order_or_event", at=event.received_at, in_transaction=True)
                 self.connection.commit()
                 return True
-            if event.sequence <= int(row["last_broker_sequence"]):
-                self.connection.execute(
-                    "UPDATE broker_event_inbox SET processing_status='STALE' WHERE broker_event_id=?",
-                    (event.broker_event_id,),
-                )
-                self.connection.commit()
-                return False
             filled = int(row["filled_quantity"])
             intent = ExecutionIntent.model_validate_json(row["intent_json"])
-            status = (
-                ExecutionStatus(row["status"])
-                if event.event_type == BrokerEventType.COMMISSION
-                else self._status_for(event, filled + event.filled_quantity, intent.quantity)
+            current_status = ExecutionStatus(row["status"])
+            status = self._status_for(
+                event,
+                filled + event.filled_quantity,
+                intent.quantity,
+                current=current_status,
             )
             new_filled = min(intent.quantity, filled + event.filled_quantity)
             self.connection.execute(
                 """UPDATE execution_intents SET status=?, filled_quantity=?, broker_order_id=?,
                    last_broker_sequence=?, version=version+1 WHERE intent_id=?""",
-                (status.value, new_filled, event.broker_order_id, event.sequence, intent.intent_id),
+                (
+                    status.value,
+                    new_filled,
+                    event.broker_order_id,
+                    max(int(row["last_broker_sequence"]), event.sequence),
+                    intent.intent_id,
+                ),
             )
             self._update_reservation(
                 intent.reservation_id, new_filled, intent.quantity, status, event.received_at
@@ -572,26 +664,182 @@ class DurableExecutionStore:
             ).fetchone()[0]
         )
 
-    def is_frozen(self) -> tuple[bool, str]:
-        row = self.connection.execute(
-            "SELECT frozen, reason FROM control_state WHERE singleton=1"
-        ).fetchone()
-        return bool(row["frozen"]), row["reason"]
+    def pending_approvals(self) -> tuple[sqlite3.Row, ...]:
+        return tuple(
+            self.connection.execute(
+                """SELECT intent_id, decision_id, client_order_key, intent_json, status, version
+                   FROM execution_intents WHERE status=? ORDER BY rowid""",
+                (ExecutionStatus.APPROVAL_PENDING.value,),
+            )
+        )
 
-    def freeze(self, reason: str, *, at: datetime, in_transaction: bool = False) -> None:
+    def active_reserved_notional(self, account_id: str) -> Decimal:
+        total = Decimal("0")
+        for row in self.connection.execute(
+            """SELECT reservation_json FROM risk_reservations
+               WHERE status IN (?, ?, ?)""",
+            (
+                ReservationStatus.ACTIVE.value,
+                ReservationStatus.PARTIALLY_CONSUMED.value,
+                ReservationStatus.RECONCILIATION_HOLD.value,
+            ),
+        ):
+            reservation = RiskReservation.model_validate_json(row["reservation_json"])
+            if reservation.account_id == account_id:
+                total += reservation.notional_reserved
+        return total
+
+    def is_frozen(self) -> tuple[bool, str]:
+        reasons = self.active_freeze_reasons()
+        return bool(reasons), ",".join(reasons)
+
+    def active_freeze_reasons(self) -> tuple[str, ...]:
+        return tuple(
+            row["reason_code"]
+            for row in self.connection.execute(
+                """SELECT reason_code FROM freeze_tickets
+                   WHERE resolved_at IS NULL AND severity='BLOCKING'
+                   ORDER BY created_at, ticket_id"""
+            )
+        )
+
+    def open_freeze_ticket(
+        self,
+        reason_code: str,
+        *,
+        source: str,
+        at: datetime,
+        severity: str = "BLOCKING",
+        in_transaction: bool = False,
+    ) -> str:
+        existing = self.connection.execute(
+            """SELECT ticket_id FROM freeze_tickets
+               WHERE reason_code=? AND source=? AND resolved_at IS NULL""",
+            (reason_code, source),
+        ).fetchone()
+        if existing is not None:
+            return str(existing["ticket_id"])
+        ticket_id = canonical_hash(
+            {"reason_code": reason_code, "source": source, "created_at": at}
+        )
+        self.connection.execute(
+            "INSERT INTO freeze_tickets VALUES (?, ?, ?, ?, ?, NULL, NULL)",
+            (ticket_id, reason_code, severity, source, at.isoformat()),
+        )
         self.connection.execute(
             "UPDATE control_state SET frozen=1, reason=?, updated_at=? WHERE singleton=1",
-            (reason, at.isoformat()),
+            (reason_code, at.isoformat()),
+        )
+        if not in_transaction:
+            remaining = self.active_freeze_reasons()
+            self.connection.execute(
+                "UPDATE control_state SET frozen=?, reason=?, updated_at=? WHERE singleton=1",
+                (bool(remaining), ",".join(remaining), at.isoformat()),
+            )
+            self.connection.commit()
+        return ticket_id
+
+    def resolve_freeze_ticket(
+        self,
+        reason_code: str,
+        *,
+        source: str,
+        at: datetime,
+        evidence: str,
+        in_transaction: bool = False,
+    ) -> int:
+        updated = self.connection.execute(
+            """UPDATE freeze_tickets SET resolved_at=?, resolution_evidence=?
+               WHERE reason_code=? AND source=? AND resolved_at IS NULL""",
+            (at.isoformat(), evidence, reason_code, source),
         )
         if not in_transaction:
             self.connection.commit()
+        return updated.rowcount
+
+    def freeze(self, reason: str, *, at: datetime, in_transaction: bool = False) -> None:
+        self.open_freeze_ticket(
+            reason.upper(), source="legacy", at=at, in_transaction=in_transaction
+        )
 
     def unfreeze_after_reconciliation(self, *, at: datetime) -> None:
         with self.connection:
+            for reason, source in (
+                ("STARTUP_RECONCILIATION", "system"),
+                ("RECONCILIATION_IN_PROGRESS", "reconciler"),
+                ("CRITICAL_RECONCILIATION_DISCREPANCY", "reconciler"),
+                ("INCOMPLETE_BROKER_SNAPSHOT", "reconciler"),
+            ):
+                self.resolve_freeze_ticket(
+                    reason,
+                    source=source,
+                    at=at,
+                    evidence="complete broker snapshot converged",
+                    in_transaction=True,
+                )
+            remaining = self.active_freeze_reasons()
             self.connection.execute(
-                "UPDATE control_state SET frozen=0, reason='', updated_at=? WHERE singleton=1",
-                (at.isoformat(),),
+                "UPDATE control_state SET frozen=?, reason=?, updated_at=? WHERE singleton=1",
+                (bool(remaining), ",".join(remaining), at.isoformat()),
             )
+
+    def set_account_baseline(self, snapshot: BrokerSnapshot) -> None:
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO broker_account_baseline VALUES (1, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(singleton) DO NOTHING""",
+                (
+                    str(snapshot.cash),
+                    str(snapshot.buying_power) if snapshot.buying_power is not None else None,
+                    str(snapshot.settled_cash) if snapshot.settled_cash is not None else None,
+                    str(snapshot.accrued_cash) if snapshot.accrued_cash is not None else None,
+                    json.dumps(
+                        {key: str(value) for key, value in snapshot.currency_balances.items()},
+                        sort_keys=True,
+                    ),
+                    snapshot.as_of.isoformat(),
+                ),
+            )
+
+    def expected_account_cash(self) -> Decimal | None:
+        baseline = self.connection.execute(
+            "SELECT cash FROM broker_account_baseline WHERE singleton=1"
+        ).fetchone()
+        if baseline is None:
+            return None
+        projection = self.connection.execute(
+            "SELECT cash_delta FROM cash_projection WHERE singleton=1"
+        ).fetchone()
+        return Decimal(baseline["cash"]) + Decimal(projection["cash_delta"])
+
+    def expected_account_fields(self) -> dict[str, Decimal | None] | None:
+        baseline = self.connection.execute(
+            "SELECT * FROM broker_account_baseline WHERE singleton=1"
+        ).fetchone()
+        if baseline is None:
+            return None
+        projection = self.connection.execute(
+            "SELECT cash_delta, commissions FROM cash_projection WHERE singleton=1"
+        ).fetchone()
+        cash_delta = Decimal(projection["cash_delta"])
+        return {
+            "cash": Decimal(baseline["cash"]) + cash_delta,
+            "settled_cash": (
+                Decimal(baseline["settled_cash"]) + cash_delta
+                if baseline["settled_cash"] is not None
+                else None
+            ),
+            "buying_power": (
+                Decimal(baseline["buying_power"]) + cash_delta
+                if baseline["buying_power"] is not None
+                else None
+            ),
+            "accrued_cash": (
+                Decimal(baseline["accrued_cash"])
+                if baseline["accrued_cash"] is not None
+                else None
+            ),
+        }
 
     def record_no_trade(
         self,
@@ -702,7 +950,12 @@ class DurableExecutionStore:
             quantity = ExecutionIntent.model_validate_json(intent_row["intent_json"]).quantity
             filled = min(quantity, old_filled + broker_event.filled_quantity)
             rebuilt[event["intent_id"]] = (
-                self._status_for(broker_event, filled, quantity).value,
+                self._status_for(
+                    broker_event,
+                    filled,
+                    quantity,
+                    current=ExecutionStatus(rebuilt.get(event["intent_id"], ("SUBMITTING", 0))[0]),
+                ).value,
                 filled,
             )
         return rebuilt
@@ -869,13 +1122,32 @@ class DurableExecutionStore:
         )
 
     @staticmethod
-    def _status_for(event: BrokerEvent, filled: int, quantity: int) -> ExecutionStatus:
+    def _status_for(
+        event: BrokerEvent,
+        filled: int,
+        quantity: int,
+        *,
+        current: ExecutionStatus = ExecutionStatus.SUBMITTING,
+    ) -> ExecutionStatus:
+        if event.event_type == BrokerEventType.COMMISSION:
+            return current
         if event.event_type == BrokerEventType.REJECTED:
+            if current in {ExecutionStatus.PARTIALLY_FILLED, ExecutionStatus.FILLED}:
+                return current
             return ExecutionStatus.REJECTED
         if event.event_type == BrokerEventType.CANCELLED:
+            if current == ExecutionStatus.FILLED:
+                return current
             return ExecutionStatus.CANCELLED
         if event.event_type in {BrokerEventType.PARTIAL_FILL, BrokerEventType.FILL}:
             return (
                 ExecutionStatus.FILLED if filled >= quantity else ExecutionStatus.PARTIALLY_FILLED
             )
+        if current in {
+            ExecutionStatus.PARTIALLY_FILLED,
+            ExecutionStatus.FILLED,
+            ExecutionStatus.CANCELLED,
+            ExecutionStatus.REJECTED,
+        }:
+            return current
         return ExecutionStatus.ACKNOWLEDGED

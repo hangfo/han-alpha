@@ -1,6 +1,6 @@
 # Han Alpha Trading System
 
-> M3 status (2026-07-18): deterministic replay truth, preregistered strategy evidence, statistical rejection gates, promotion governance and the registered default backtest are complete. This validates engineering mechanics only—not market-data semantics, venue fidelity, capacity or alpha. External data, LLM and broker access remain separately gated.
+> M6 status (2026-07-19): M5 durable execution is hardened and the M6 read-only IBKR fact-tape/reducer/shadow kernel is locally verified. Real IBKR Paper callbacks, burn-in and all Paper writes remain blocked. This validates engineering mechanics only—not venue fidelity, production readiness or alpha.
 
 A directly runnable, evidence-grounded trading research and IBKR paper-execution system.
 
@@ -24,6 +24,8 @@ The system is built around one rule: **LLMs may interpret evidence and veto trad
 - Deterministic PIT portfolio replay with shared cash/risk reservations, explicit orders/fills, corporate actions and parity hashes.
 - Canonical experiment manifests, failed-trial cemetery and immutable JSON/HTML result artifacts.
 - Point-in-time research contexts, interpretable baselines, walk-forward diagnostics, bounded counterfactuals and fail-closed promotion review.
+- Durable capsule/reservation/outbox/inbox execution control, persistent freeze tickets, exact cash/protection reconciliation and fault-injectable Fake Broker.
+- Read-only IBKR callback fact tape, snapshot completeness certificates, order-independent reducer and shadow execution reality-gap ledger.
 - Unit, integration, and adversarial tests.
 
 ## Safety boundary
@@ -63,6 +65,7 @@ Then visit `http://127.0.0.1:8000/docs`.
 5. Keep `configs/paper.yaml` and a paper-only client ID.
 6. Install the official Python API from the TWS API distribution so `import ibapi` works.
 7. Change `mode` only after adding a real market-data provider; change `execution.broker` to `ibkr` only for paper testing.
+8. First run only `hanalpha ibkr-observe --state .state/ibkr-observer.sqlite3`; do not enable writes until repeated complete snapshots converge.
 
 ## Architecture
 
@@ -90,6 +93,9 @@ hanalpha demo --cycles 20
 hanalpha backtest --symbol CRDO --bars 1500
 hanalpha pit quality --state .state/pit --snapshot <snapshot_id>
 hanalpha pit snapshot --state .state/pit --snapshot <snapshot_id>
+hanalpha execution-reconcile --control <control.sqlite3> --broker-state <fake-broker.sqlite3>
+hanalpha execution-approvals --control <control.sqlite3>
+hanalpha ibkr-observe --state .state/ibkr-observer.sqlite3 --timeout 15
 hanalpha serve --host 127.0.0.1 --port 8000
 pytest
 ruff check src tests

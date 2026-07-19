@@ -67,8 +67,10 @@ Provider 故障行为与真实 PIT on/off 增量价值仍为 BLOCKED，不得据
 - [ ] flatten缺失可靠报价时不会猜价格。
 
 M5已在本地Fake Broker边界验证并发Reservation容量、经济订单幂等、持久
-freeze、Unknown Submit对账和缺失保护冻结；真实IBKR及完整cancel/flatten
-单写入者路径仍属于M6，因此以上平台级条目暂不整体勾选。
+Freeze Ticket、严格Unknown Submit对账、按父订单保护图、精确现金对账和
+reservation-aware账户容量。M6只读事实带与完整性证书也已通过本地测试；
+真实IBKR burn-in及完整durable cancel/flatten单写入者路径仍未完成，因此以上
+平台级条目暂不整体勾选。
 
 ## 8. 工程质量
 

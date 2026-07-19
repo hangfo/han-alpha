@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -14,6 +15,10 @@ from hanalpha.portfolio import Ledger
 
 class FreezeRequest(BaseModel):
     reason: str = Field(min_length=3, max_length=500)
+
+
+class ApprovalRequest(BaseModel):
+    actor_id: str = Field(min_length=3, max_length=200)
 
 
 class AppState:
@@ -107,14 +112,56 @@ async def freeze(
 ) -> dict[str, Any]:
     system = get_system()
     system.kill_switch.freeze(request.reason)
-    return {"frozen": True, "reason": system.kill_switch.reason}
+    system.execution_store.open_freeze_ticket(
+        "MANUAL_OPERATOR_FREEZE", source="operator_api", at=datetime.now(UTC)
+    )
+    return {"frozen": True, "reason": request.reason}
 
 
 @app.post("/risk/unfreeze")
 async def unfreeze(_: Annotated[None, Depends(require_operator_access)]) -> dict[str, Any]:
     system = get_system()
-    system.kill_switch.unfreeze()
-    return {"frozen": False}
+    system.execution_store.resolve_freeze_ticket(
+        "MANUAL_OPERATOR_FREEZE",
+        source="operator_api",
+        at=datetime.now(UTC),
+        evidence="authenticated operator request",
+    )
+    frozen, reason = system.execution_store.is_frozen()
+    if not frozen:
+        system.kill_switch.unfreeze()
+    return {"frozen": frozen, "reason": reason}
+
+
+@app.get("/execution/approvals")
+async def pending_approvals(
+    _: Annotated[None, Depends(require_operator_access)],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "intent_id": row["intent_id"],
+            "decision_id": row["decision_id"],
+            "client_order_key": row["client_order_key"],
+            "status": row["status"],
+            "version": row["version"],
+        }
+        for row in get_system().execution_store.pending_approvals()
+    ]
+
+
+@app.post("/execution/approvals/{intent_id}")
+async def approve_intent(
+    intent_id: str,
+    request: ApprovalRequest,
+    _: Annotated[None, Depends(require_operator_access)],
+) -> dict[str, str]:
+    try:
+        approval_id = get_system().execution_store.approve(
+            intent_id, actor_id=request.actor_id, at=datetime.now(UTC)
+        )
+    except (KeyError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"intent_id": intent_id, "approval_id": approval_id, "status": "APPROVED"}
 
 
 @app.post("/orders/cancel-all")

@@ -27,6 +27,8 @@ async def test_full_synthetic_cycle(tmp_path, risk_config, runtime_access, now) 
     ledger = Ledger(tmp_path / "ledger.sqlite3")
     provider = SyntheticMarketDataProvider(risk_config.bar_interval_minutes)
     broker = SimulatedBroker(risk_config.starting_cash, risk_config.execution)
+    execution_store = DurableExecutionStore(tmp_path / "execution.sqlite3")
+    execution_store.unfreeze_after_reconciliation(at=now)
     system = TradingSystem(
         config=risk_config,
         provider=provider,
@@ -35,7 +37,7 @@ async def test_full_synthetic_cycle(tmp_path, risk_config, runtime_access, now) 
         evidence_service=EvidenceService(
             EvidenceStore(tmp_path / "evidence.sqlite3"), DeterministicEvidenceExtractor()
         ),
-        execution_store=DurableExecutionStore(tmp_path / "execution.sqlite3"),
+        execution_store=execution_store,
         runtime_access=runtime_access,
         clock=FixedDecisionClock(now),
     )
@@ -57,6 +59,7 @@ async def test_runtime_freezes_capsule_instead_of_calling_broker_directly(
     ledger = Ledger(tmp_path / "ledger.sqlite3")
     broker = CountingBroker(risk_config.starting_cash, risk_config.execution)
     execution_store = DurableExecutionStore(tmp_path / "execution.sqlite3")
+    execution_store.unfreeze_after_reconciliation(at=now)
     system = TradingSystem(
         config=risk_config,
         provider=SyntheticMarketDataProvider(risk_config.bar_interval_minutes),

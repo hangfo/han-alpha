@@ -21,9 +21,15 @@ from hanalpha.evidence.models import ClaimType, EvidenceDecision, EvidenceDocume
 from hanalpha.evidence.service import EvidenceService
 from hanalpha.evidence.store import EvidenceStore
 from hanalpha.execution.base import Broker
-from hanalpha.execution.control_models import DecisionCapsule, ExecutionIntent, RiskReservation
+from hanalpha.execution.control_models import (
+    BrokerSnapshot,
+    DecisionCapsule,
+    ExecutionIntent,
+    RiskReservation,
+)
 from hanalpha.execution.control_store import DurableExecutionStore
 from hanalpha.execution.ibkr import IBKRBroker
+from hanalpha.execution.reconciliation import Reconciler
 from hanalpha.execution.simulated import SimulatedBroker
 from hanalpha.features.technical import average_dollar_volume
 from hanalpha.portfolio.ledger import Ledger
@@ -62,7 +68,6 @@ class TradingSystem:
         self.last_regime: dict[str, Any] | None = None
         self.last_signals: list[dict[str, Any]] = []
         self.last_orders: list[dict[str, Any]] = []
-        self.pending_orders: dict[str, tuple[OrderRequest, Any]] = {}
         self.cycle_count = 0
 
     def _build_strategies(self) -> list[Any]:
@@ -303,6 +308,41 @@ class TradingSystem:
                     "risk": decision.model_dump(mode="json"),
                     "events": [],
                 }
+                durable_capacity = min(
+                    max(
+                        0.0,
+                        account.buying_power
+                        - float(
+                            self.execution_store.active_reserved_notional("runtime-paper")
+                        ),
+                    ),
+                    max(
+                        0.0,
+                        account.net_liquidation
+                        * min(
+                            self.config.risk.max_gross_exposure,
+                            regime.max_gross_exposure,
+                        )
+                        - account.gross_exposure * account.net_liquidation,
+                    ),
+                )
+                if decision.approved and plan.notional > durable_capacity:
+                    self.execution_store.record_no_trade(
+                        candidate_decision_id,
+                        reason_code="durable_capacity_exhausted",
+                        source="authoritative_account_read_model",
+                        at=cycle_now,
+                        payload={
+                            "required_notional": plan.notional,
+                            "available_notional": durable_capacity,
+                        },
+                    )
+                    order_row["capacity_rejection"] = {
+                        "required_notional": plan.notional,
+                        "available_notional": durable_capacity,
+                    }
+                    orders.append(order_row)
+                    continue
                 if decision.approved:
                     order = OrderRequest(
                         order_id=f"order:{plan.plan_id}",
@@ -355,22 +395,7 @@ class TradingSystem:
                         cash_reserved=Decimal(str(plan.notional)),
                         notional_reserved=Decimal(str(plan.notional)),
                         risk_reserved=Decimal(str(decision.risk_dollars)),
-                        account_notional_capacity=Decimal(
-                            str(
-                                min(
-                                    account.buying_power,
-                                    max(
-                                        0.0,
-                                        account.net_liquidation
-                                        * min(
-                                            self.config.risk.max_gross_exposure,
-                                            regime.max_gross_exposure,
-                                        )
-                                        - account.gross_exposure * account.net_liquidation,
-                                    ),
-                                )
-                            )
-                        ),
+                        account_notional_capacity=Decimal(str(durable_capacity)),
                         quantity_reserved=decision.approved_quantity,
                         expires_at=cycle_now + timedelta(minutes=5),
                         created_at=cycle_now,
@@ -387,8 +412,6 @@ class TradingSystem:
                     )
                     self.execution_store.stage(capsule, reservation, intent)
                     self.ledger.record_order(order)
-                    if not should_auto_submit:
-                        self.pending_orders[order.order_id] = (order, quote)
                     events = [
                         OrderEvent(
                             order_id=order.order_id,
@@ -443,7 +466,7 @@ class TradingSystem:
             "market_data_healthy": await self.provider.is_healthy(),
             "kill_switch": {"frozen": self.kill_switch.frozen, "reason": self.kill_switch.reason},
             "regime": self.last_regime,
-            "pending_orders": len(self.pending_orders),
+            "pending_orders": self.execution_store.pending_approval_count(),
             "execution_control": {
                 "frozen": self.execution_store.is_frozen()[0],
                 "freeze_reason": self.execution_store.is_frozen()[1],
@@ -508,6 +531,32 @@ async def build_system(config: AppConfig, secrets: SecretSettings, ledger: Ledge
     execution_store = DurableExecutionStore(
         ledger.path.with_name(f"{ledger.path.stem}-execution.sqlite3")
     )
+    if isinstance(broker, SimulatedBroker):
+        # Synthetic mode has a complete, in-process broker truth and must remain secret-free.
+        account = await broker.get_account_snapshot()
+        Reconciler(execution_store).reconcile(
+            BrokerSnapshot(
+                as_of=account.timestamp,
+                cash=Decimal(str(account.cash)),
+                settled_cash=Decimal(str(account.cash)),
+                buying_power=Decimal(str(account.buying_power)),
+                accrued_cash=Decimal("0"),
+                base_currency="USD",
+                currency_balances={"USD": Decimal(str(account.cash))},
+                complete=True,
+                completeness_certificate_id=canonical_hash(
+                    {"broker": "simulated", "as_of": account.timestamp}
+                ),
+                orders=(),
+                positions={position.symbol: position.quantity for position in account.positions},
+                protections={
+                    symbol: protection.quantity
+                    for symbol, protection in broker.protections.items()
+                },
+                events=(),
+            ),
+            at=account.timestamp,
+        )
     return TradingSystem(
         config=config,
         provider=provider,

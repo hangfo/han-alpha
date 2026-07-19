@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
@@ -42,7 +43,47 @@ class Reconciler:
 
     def reconcile(self, snapshot: BrokerSnapshot, *, at: datetime) -> ReconciliationReport:
         run_id = canonical_hash({"as_of": snapshot.as_of, "started_at": at})
-        self.store.freeze("reconciliation_in_progress", at=at)
+        if not snapshot.complete:
+            discrepancy = self._discrepancy(
+                DiscrepancySeverity.CRITICAL,
+                "INCOMPLETE_BROKER_SNAPSHOT",
+                snapshot.completeness_certificate_id or "missing-certificate",
+                {"snapshot_as_of": snapshot.as_of.isoformat()},
+            )
+            with self.store.connection:
+                self.store.connection.execute(
+                    "INSERT OR IGNORE INTO reconciliation_runs VALUES (?, ?, ?, ?, ?)",
+                    (
+                        run_id,
+                        at.isoformat(),
+                        at.isoformat(),
+                        "INCOMPLETE_SNAPSHOT",
+                        json.dumps({"status": "INCOMPLETE_SNAPSHOT", "discrepancy_count": 1}),
+                    ),
+                )
+                self.store.connection.execute(
+                    "INSERT OR IGNORE INTO reconciliation_discrepancies VALUES (?, ?, ?, ?, ?, ?, NULL)",
+                    (
+                        discrepancy.discrepancy_id,
+                        run_id,
+                        discrepancy.severity.value,
+                        discrepancy.kind,
+                        discrepancy.entity_key,
+                        json.dumps(discrepancy.details, sort_keys=True, separators=(",", ":")),
+                    ),
+                )
+            self.store.open_freeze_ticket(
+                "INCOMPLETE_BROKER_SNAPSHOT", source="reconciler", at=at
+            )
+            return ReconciliationReport(
+                run_id=run_id,
+                status="INCOMPLETE_SNAPSHOT",
+                discrepancies=(discrepancy,),
+                frozen=True,
+            )
+        self.store.open_freeze_ticket(
+            "RECONCILIATION_IN_PROGRESS", source="reconciler", at=at
+        )
         with self.store.connection:
             self.store.connection.execute(
                 "INSERT INTO reconciliation_runs VALUES (?, ?, NULL, 'RUNNING', NULL)",
@@ -68,7 +109,9 @@ class Reconciler:
                     )
                 )
                 continue
-            self.store.resolve_unknown_at_broker(key, at=at)
+            self.store.resolve_unknown_at_broker(
+                key, broker_order_id=broker_order.broker_order_id, at=at
+            )
             refreshed = self.store.intent(local["intent_id"])
             if int(refreshed["filled_quantity"]) != broker_order.filled_quantity:
                 discrepancies.append(
@@ -131,6 +174,87 @@ class Reconciler:
                         },
                     )
                 )
+
+        for key, broker_order in broker_by_key.items():
+            local = local_by_key.get(key)
+            if local is None:
+                continue
+            filled = int(self.store.intent(local["intent_id"])["filled_quantity"])
+            children = [
+                child
+                for child in snapshot.protection_orders
+                if child.parent_client_order_key == key and child.active
+            ]
+            stop_quantity = sum(
+                child.quantity for child in children if child.protection_type == "STOP"
+            )
+            target_quantity = sum(
+                child.quantity for child in children if child.protection_type == "TARGET"
+            )
+            protected_quantity = min(stop_quantity, target_quantity)
+            if not children:
+                protected_quantity = broker_order.protection_quantity
+            if broker_order.side == Side.BUY and filled > protected_quantity:
+                unprotected = filled - protected_quantity
+                self.store.record_naked_exposure(
+                    broker_order.instrument_id,
+                    unprotected_quantity=unprotected,
+                    duration_ms=0,
+                    at=at,
+                )
+                discrepancies.append(
+                    self._discrepancy(
+                        DiscrepancySeverity.CRITICAL,
+                        "ORDER_PROTECTION_SHORTFALL",
+                        key,
+                        {
+                            "filled": filled,
+                            "protected": protected_quantity,
+                            "stop_quantity": stop_quantity,
+                            "target_quantity": target_quantity,
+                            "broker_order_id": broker_order.broker_order_id,
+                        },
+                    )
+                )
+
+        expected_cash = self.store.expected_account_cash()
+        if expected_cash is None:
+            self.store.set_account_baseline(snapshot)
+        elif abs(expected_cash - snapshot.cash) > Decimal("0.01"):
+            discrepancies.append(
+                self._discrepancy(
+                    DiscrepancySeverity.CRITICAL,
+                    "CASH_MISMATCH",
+                    snapshot.base_currency,
+                    {"local": str(expected_cash), "broker": str(snapshot.cash)},
+                )
+            )
+
+        expected_fields = self.store.expected_account_fields()
+        if expected_fields is not None:
+            for field_name in ("settled_cash", "buying_power", "accrued_cash"):
+                expected = expected_fields[field_name]
+                actual = getattr(snapshot, field_name)
+                if expected is not None and actual is not None and abs(expected - actual) > Decimal("0.01"):
+                    discrepancies.append(
+                        self._discrepancy(
+                            DiscrepancySeverity.WARNING,
+                            f"{field_name.upper()}_MISMATCH",
+                            snapshot.base_currency,
+                            {"local": str(expected), "broker": str(actual)},
+                        )
+                    )
+            base_balance = snapshot.currency_balances.get(snapshot.base_currency)
+            if base_balance is not None and abs(base_balance - snapshot.cash) > Decimal("0.01"):
+                discrepancies.append(
+                    self._discrepancy(
+                        DiscrepancySeverity.WARNING,
+                        "BASE_CURRENCY_BALANCE_MISMATCH",
+                        snapshot.base_currency,
+                        {"cash": str(snapshot.cash), "currency_balance": str(base_balance)},
+                    )
+                )
+        for instrument in sorted(snapshot.positions):
             if snapshot.positions.get(instrument, 0) > snapshot.protections.get(instrument, 0):
                 unprotected = snapshot.positions.get(instrument, 0) - snapshot.protections.get(
                     instrument, 0
@@ -167,7 +291,7 @@ class Reconciler:
                 )
 
         critical = any(item.severity == DiscrepancySeverity.CRITICAL for item in discrepancies)
-        status = "BLOCKED" if critical else "CONVERGED"
+        status = "BLOCKED" if critical else ("DEGRADED" if discrepancies else "CONVERGED")
         with self.store.connection:
             for item in discrepancies:
                 self.store.connection.execute(
@@ -195,7 +319,9 @@ class Reconciler:
                 ),
             )
         if critical:
-            self.store.freeze("critical_reconciliation_discrepancy", at=at)
+            self.store.open_freeze_ticket(
+                "CRITICAL_RECONCILIATION_DISCREPANCY", source="reconciler", at=at
+            )
         else:
             self.store.unfreeze_after_reconciliation(at=at)
         return ReconciliationReport(

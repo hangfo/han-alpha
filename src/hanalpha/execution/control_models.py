@@ -246,6 +246,19 @@ class BrokerOrderTruth(BaseModel):
     quantity: int
     filled_quantity: int
     status: str
+    perm_id: str | None = None
+    parent_client_order_key: str | None = None
+    protection_quantity: int = Field(default=0, ge=0)
+
+
+class BrokerProtectionTruth(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    protection_order_id: str
+    parent_client_order_key: str = Field(pattern=HASH_PATTERN)
+    protection_type: str
+    quantity: int = Field(ge=0)
+    active: bool = True
 
 
 class BrokerSnapshot(BaseModel):
@@ -253,7 +266,15 @@ class BrokerSnapshot(BaseModel):
 
     as_of: datetime
     cash: Decimal
+    settled_cash: Decimal | None = None
+    buying_power: Decimal | None = None
+    accrued_cash: Decimal | None = None
+    base_currency: str = "USD"
+    currency_balances: dict[str, Decimal] = Field(default_factory=dict)
+    complete: bool = True
+    completeness_certificate_id: str | None = None
     orders: tuple[BrokerOrderTruth, ...]
     positions: dict[str, int]
     protections: dict[str, int]
     events: tuple[BrokerEvent, ...]
+    protection_orders: tuple[BrokerProtectionTruth, ...] = ()

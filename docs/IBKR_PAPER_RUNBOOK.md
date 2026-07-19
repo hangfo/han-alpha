@@ -3,7 +3,7 @@
 ## Preflight
 
 1. Confirm `configs/paper.yaml` is loaded.
-2. Confirm the port is Gateway paper `4002` or TWS paper `7497`, unless intentionally customized.
+2. Confirm the port is Gateway paper `4002` or TWS paper `7497`; the observer rejects every other port.
 3. Confirm the account is the paper account.
 4. Confirm a dedicated API client ID.
 5. Confirm TWS/IB Gateway socket clients are enabled.
@@ -11,18 +11,22 @@
 7. Verify market-data permissions and data freshness.
 8. Run `hanalpha doctor`.
 9. Run the test suite.
-10. Start with one highly liquid symbol and very small simulated risk.
+10. Run repeated zero-write Observer sessions before considering any order.
 
-## Activation sequence
+## Read-only burn-in sequence
 
 - Start TWS/IB Gateway and authenticate with supported 2FA.
-- Start Han Alpha locally.
+- Run `hanalpha ibkr-observe --state .state/ibkr-observer.sqlite3 --timeout 15`.
+- Require `complete=true`; a TCP connection without all end markers is incomplete.
+- Restart the process and TWS/Gateway, then repeat across a reset boundary.
+- Replay the fact tape and require the same reduced account/order/position/execution state.
 - Check `/health` and `/status`.
 - Compare account values with TWS manually.
 - Compare positions and open orders.
 - Generate an order plan without submission.
-- Enable paper submission only after manual review.
-- Confirm parent, target, and stop IDs in TWS.
+
+Do not enable Paper submission until durable cancel, bracket recovery, Unknown Submit and prolonged
+reconciliation burn-in are separately accepted. The current M6 state does not meet that gate.
 
 ## Daily operation
 

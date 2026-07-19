@@ -1,5 +1,35 @@
 # Verification report
 
+## M5 review hardening and M6 read-only kernel - 2026-07-19
+
+Implemented and verified locally without Provider, vendor or Broker writes:
+
+- persistent Freeze Tickets gate staging, approval and dispatch; startup opens a new reconciliation ticket;
+- early Fake-Broker fence publication plus lease revalidation closes the pre-submit stale-writer window;
+- strict post-claim Unknown absence, discovered-order binding and fact-identity event reduction;
+- exact Decimal cash, cash/account-field reconciliation and per-parent STOP/TARGET Protection Graph;
+- SQLite-only pending approvals, immutable approval receipts and authenticated API plus CLI entrypoints;
+- reservation-aware combined account capacity and explicit capacity No-Trade outcomes;
+- read-only IBKR session epochs, raw callback fact tape, snapshot completeness certificate and deterministic reducer;
+- execution correction/commission identity and shadow implementation-shortfall decomposition.
+
+Canonical local result:
+
+- `scripts/preflight.sh`: PASS on Python 3.12.13;
+- `scripts/verify_all.sh`: PASS;
+- Ruff: PASS;
+- mypy strict: PASS, 96 source files;
+- pytest: PASS, 171 tests;
+- branch-aware coverage: 85.20%, required threshold 85%;
+- sdist/wheel, doctor, three-cycle synthetic demo and 400-bar registered backtest: PASS;
+- local execution reconciliation/approval-list CLI smoke: PASS;
+- `git diff --check`: PASS.
+
+The existing upstream Starlette/FastAPI TestClient warning remains non-fatal. Official `ibapi` is not
+installed and local Paper ports 4002/7497 are not listening. Therefore authenticated callbacks,
+golden-tape burn-in, session reset, durable cancel, bracket recovery and every Paper order are BLOCKED.
+No IBKR request or Broker write was made. Profitability remains NOT ESTABLISHED.
+
 Verification date: 2026-07-17
 
 ## Automated checks

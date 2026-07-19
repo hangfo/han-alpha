@@ -32,6 +32,13 @@
 - 夜间reset和进程重启；
 - 本地账本与Broker持仓不一致；
 - kill switch并发触发。
+- 快照缺任一account/open-order/position/execution end marker时不得标记complete；
+- orderStatus重复且乱序、commission先于execDetails、execution correction后到；
+- 完整快照时间等于Unknown claim时间时不得重发；
+- 新writer只取得lease尚未submit时，旧writer已被Broker fence拒绝；
+- 同Symbol多父订单不得互相借用STOP/TARGET保护数量；
+- Cash使用高精度小数，SettledCash/BuyingPower/AccruedCash/币种余额分别核对；
+- Observer只允许Paper端口，测试桩不提供placeOrder仍可完成完整快照。
 
 ## LLM和证据
 

@@ -15,6 +15,7 @@ Date: 2026-07-19
 - Startup/continuous reconciliation, unknown-submit resolution, Broker-only/local-only/fill/position/protection discrepancy classification and persistent freeze.
 - No-trade, reality-gap and naked-exposure ledgers.
 - Adversarial recovery tests covering transaction failpoints, restart, duplicate and out-of-order-equivalent callbacks, partial fill, split brain, accepted/dropped response, missing protection and projection rebuild.
+- Review hardening added persistent Freeze Tickets, pre-submit lease revalidation and early broker fence publication, strict post-claim Unknown absence, discovered-order binding, Decimal cash, account-field reconciliation, per-parent STOP/TARGET Protection Graph, formal approval API/CLI and authoritative reservation-aware capacity.
 
 ## Explicit boundary
 

@@ -78,9 +78,15 @@ def _unfreeze(store: DurableExecutionStore, broker: DurableFakeBroker) -> None:
     assert store.is_frozen() == (False, "")
 
 
+def _allow_fixture_staging(store: DurableExecutionStore) -> None:
+    """Tests that do not exercise reconciliation explicitly establish a fixture authority."""
+    store.unfreeze_after_reconciliation(at=NOW)
+
+
 @pytest.mark.parametrize("failpoint", ["after_capsule", "after_reservation", "after_outbox"])
 def test_stage_is_atomic_across_crash_boundaries(tmp_path, failpoint) -> None:
     store = DurableExecutionStore(tmp_path / f"{failpoint}.sqlite3")
+    _allow_fixture_staging(store)
     capsule, reservation, intent = _contracts(discriminator=failpoint)
     try:
         with pytest.raises(RuntimeError, match="injected crash"):
@@ -100,12 +106,14 @@ def test_manual_approval_and_outbox_survive_restart_exactly_once(tmp_path) -> No
     path = tmp_path / "control.sqlite3"
     capsule, reservation, intent = _contracts(approval_required=True)
     store = DurableExecutionStore(path)
+    _allow_fixture_staging(store)
     store.stage(capsule, reservation, intent)
     assert store.pending_approval_count() == 1
     store.close()
 
     reopened = DurableExecutionStore(path)
     try:
+        _allow_fixture_staging(reopened)
         approval_id = reopened.approve(intent.intent_id, actor_id="operator-1", at=NOW)
         assert len(approval_id) == 64
         assert reopened.pending_approval_count() == 0
@@ -151,6 +159,7 @@ def test_two_writers_cannot_overreserve_same_account_capacity(tmp_path) -> None:
         approval_required=False,
     )
     try:
+        _allow_fixture_staging(first_store)
         first_store.stage(first[0], first_reservation, first_intent)
         with pytest.raises(ExecutionInvariantError, match="capacity exceeded"):
             second_store.stage(second[0], second_reservation, second_intent)
@@ -308,7 +317,9 @@ def test_broker_only_order_and_naked_fill_fail_closed(tmp_path) -> None:
             at=NOW + timedelta(seconds=2),
         )
         assert report.status == "BLOCKED"
-        assert "NAKED_LONG_EXPOSURE" in {item.kind for item in report.discrepancies}
+        kinds = {item.kind for item in report.discrepancies}
+        assert "ORDER_PROTECTION_SHORTFALL" in kinds
+        assert "NAKED_LONG_EXPOSURE" in kinds
         assert store.is_frozen()[0]
     finally:
         broker.close()
@@ -365,6 +376,136 @@ def test_fill_cancel_race_and_late_commission_rebuild_without_double_effect(tmp_
             "SELECT quantity FROM position_projections WHERE instrument_id='inst-alpha'"
         ).fetchone()
         assert stored_position["quantity"] == 4
+    finally:
+        broker.close()
+        store.close()
+
+
+def test_freeze_ticket_blocks_staging_approval_and_dispatch(tmp_path) -> None:
+    store = DurableExecutionStore(tmp_path / "control.sqlite3")
+    broker = DurableFakeBroker(tmp_path / "broker.sqlite3")
+    capsule, reservation, pending = _contracts(
+        discriminator="freeze-authority", approval_required=True
+    )
+    try:
+        _unfreeze(store, broker)
+        store.stage(capsule, reservation, pending)
+        store.open_freeze_ticket("MARKET_DATA_STALE", source="market", at=NOW)
+        with pytest.raises(ExecutionInvariantError, match="approval is frozen"):
+            store.approve(pending.intent_id, actor_id="operator-1", at=NOW)
+        other = _contracts(discriminator="freeze-second")
+        with pytest.raises(ExecutionInvariantError, match="new risk is frozen"):
+            store.stage(*other)
+        assert store.pending_approval_count() == 1
+    finally:
+        broker.close()
+        store.close()
+
+
+def test_new_lease_fences_old_writer_before_new_writer_submits(tmp_path) -> None:
+    store = DurableExecutionStore(tmp_path / "control.sqlite3")
+    broker = DurableFakeBroker(tmp_path / "broker.sqlite3")
+    _, _, intent = _contracts(discriminator="fence-window")
+    try:
+        first = store.acquire_lease(
+            "broker-writer", owner_id="old", at=NOW, ttl=timedelta(seconds=1)
+        )
+        ExecutionWorker(store, broker, first)
+        second = store.acquire_lease(
+            "broker-writer",
+            owner_id="new",
+            at=NOW + timedelta(seconds=2),
+            ttl=timedelta(minutes=1),
+        )
+        ExecutionWorker(store, broker, second)
+        with pytest.raises(StaleFencingToken):
+            broker.submit(
+                intent, fencing_token=first.fencing_token, at=NOW + timedelta(seconds=3)
+            )
+    finally:
+        broker.close()
+        store.close()
+
+
+def test_unknown_absence_requires_snapshot_strictly_after_claim(tmp_path) -> None:
+    store = DurableExecutionStore(tmp_path / "control.sqlite3")
+    broker = DurableFakeBroker(tmp_path / "broker.sqlite3")
+    capsule, reservation, intent = _contracts(discriminator="strict-unknown")
+    try:
+        _unfreeze(store, broker)
+        store.stage(capsule, reservation, intent)
+        lease = store.acquire_lease(
+            "broker-writer", owner_id="worker", at=NOW, ttl=timedelta(minutes=1)
+        )
+        assert store.claim_next(lease, at=NOW)
+        store.recover_claimed_as_unknown(at=NOW)
+        with pytest.raises(ExecutionInvariantError, match="does not post-date"):
+            store.requeue_unknown_absent_at_broker(
+                intent.client_order_key, snapshot_as_of=NOW, at=NOW
+            )
+    finally:
+        broker.close()
+        store.close()
+
+
+def test_cash_mismatch_is_critical_and_decimal_exact(tmp_path) -> None:
+    store = DurableExecutionStore(tmp_path / "control.sqlite3")
+    broker = DurableFakeBroker(tmp_path / "broker.sqlite3")
+    capsule, reservation, intent = _contracts(discriminator="cash")
+    try:
+        _unfreeze(store, broker)
+        store.stage(capsule, reservation, intent)
+        lease = store.acquire_lease(
+            "broker-writer", owner_id="worker", at=NOW, ttl=timedelta(minutes=1)
+        )
+        ExecutionWorker(store, broker, lease).dispatch_once(at=NOW)
+        fill = broker.fill(
+            intent.client_order_key,
+            quantity=10,
+            price=Decimal("100.00000001"),
+            at=NOW + timedelta(seconds=1),
+        )
+        store.ingest_broker_event(fill)
+        snapshot = broker.snapshot(at=NOW + timedelta(seconds=2))
+        assert snapshot.cash == Decimal("98999.99999990")
+        corrupted = snapshot.model_copy(update={"cash": snapshot.cash - Decimal("1")})
+        report = Reconciler(store).reconcile(corrupted, at=NOW + timedelta(seconds=2))
+        assert report.status == "BLOCKED"
+        assert "CASH_MISMATCH" in {item.kind for item in report.discrepancies}
+    finally:
+        broker.close()
+        store.close()
+
+
+def test_every_control_process_restart_requires_reconciliation(tmp_path) -> None:
+    path = tmp_path / "control.sqlite3"
+    store = DurableExecutionStore(path)
+    store.unfreeze_after_reconciliation(at=NOW)
+    assert not store.is_frozen()[0]
+    store.close()
+
+    reopened = DurableExecutionStore(path)
+    try:
+        assert reopened.is_frozen()[0]
+        assert "STARTUP_RECONCILIATION" in reopened.active_freeze_reasons()
+    finally:
+        reopened.close()
+
+
+def test_incomplete_snapshot_is_persisted_and_cannot_unfreeze(tmp_path) -> None:
+    store = DurableExecutionStore(tmp_path / "control.sqlite3")
+    broker = DurableFakeBroker(tmp_path / "broker.sqlite3")
+    try:
+        incomplete = broker.snapshot(at=NOW).model_copy(
+            update={"complete": False, "completeness_certificate_id": "incomplete-1"}
+        )
+        report = Reconciler(store).reconcile(incomplete, at=NOW)
+        assert report.status == "INCOMPLETE_SNAPSHOT"
+        assert store.is_frozen()[0]
+        row = store.connection.execute(
+            "SELECT status FROM reconciliation_runs WHERE run_id=?", (report.run_id,)
+        ).fetchone()
+        assert row["status"] == "INCOMPLETE_SNAPSHOT"
     finally:
         broker.close()
         store.close()
