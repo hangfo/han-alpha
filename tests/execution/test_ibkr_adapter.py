@@ -42,6 +42,7 @@ def test_ibapp_callbacks_normalize_redact_and_preserve_order_state(tmp_path) -> 
     )
     contract = SimpleNamespace(symbol="NVDA", conId=42, currency="USD", secType="STK")
     order = SimpleNamespace(
+        orderId=5,
         permId=1001,
         parentId=0,
         clientId=7,
@@ -82,6 +83,8 @@ def test_ibapp_callbacks_normalize_redact_and_preserve_order_state(tmp_path) -> 
     app.accountSummary(11, "DU123", "TotalCashValue", "100000", "USD")
     app.accountSummary(11, "DU123", "bad", "not-numeric", "USD")
     app.openOrder(5, contract, order, SimpleNamespace(status="Submitted"))
+    app.completedOrder(contract, order, SimpleNamespace(status="Filled"))
+    app.completedOrdersEnd()
     app.orderStatus(5, "Submitted", 3, 7, 100.25, 1001, 0, 100.25, 7, "", 0)
     app.execDetails(12, contract, execution)
     app.commissionReport(
@@ -100,6 +103,8 @@ def test_ibapp_callbacks_normalize_redact_and_preserve_order_state(tmp_path) -> 
     facts = store.facts(session)
     assert {fact.fact_type for fact in facts} >= {
         IBKRFactType.OPEN_ORDER,
+        IBKRFactType.COMPLETED_ORDER,
+        IBKRFactType.COMPLETED_ORDER_END,
         IBKRFactType.EXECUTION,
         IBKRFactType.COMMISSION,
         IBKRFactType.DISCONNECT,
@@ -176,7 +181,9 @@ async def test_ibkr_write_adapter_bracket_idempotency_and_risk_reduction(
     assert submitted[0].status == OrderStatus.SUBMITTED
     assert [item[0] for item in app.placed] == [20, 21, 22]
     assert [item[2].transmit for item in app.placed] == [False, False, True]
-    assert all(item[2].orderRef.startswith("HA:") for item in app.placed)
+    refs = [item[2].orderRef for item in app.placed]
+    assert len(set(refs)) == 3
+    assert [reference.rsplit(":", 1)[-1] for reference in refs] == ["P", "T", "S"]
     duplicate = await broker.submit(request, quote, broker_write_capability)
     assert duplicate[0].message == "duplicate_idempotency_key"
 

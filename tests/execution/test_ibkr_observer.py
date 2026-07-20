@@ -19,6 +19,7 @@ from hanalpha.execution.ibkr_observer import (
     account_hash,
 )
 from hanalpha.execution.ibkr_snapshot import IBKRBrokerSnapshotAdapter
+from hanalpha.simulation.events import canonical_hash
 
 NOW = datetime(2024, 1, 1, tzinfo=UTC)
 ACCOUNT = "DU1234567"
@@ -35,7 +36,9 @@ def _barrier() -> ObserverRequestBarrier:
     )
 
 
-def _semantic_facts(collector: IBKRCallbackCollector) -> None:
+def _semantic_facts(
+    collector: IBKRCallbackCollector, *, cash: str = "100000"
+) -> None:
     barrier = collector.barrier
     assert barrier is not None
     collector.record(IBKRFactType.CONNECTION, {}, identity_key="connected", at=NOW)
@@ -49,9 +52,9 @@ def _semantic_facts(collector: IBKRCallbackCollector) -> None:
     collector.record(IBKRFactType.SERVER_TIME, {}, identity_key="time", at=NOW)
     for tag, value in (
         ("NetLiquidation", "100000"),
-        ("TotalCashValue", "100000"),
-        ("SettledCash", "100000"),
-        ("BuyingPower", "100000"),
+        ("TotalCashValue", cash),
+        ("SettledCash", cash),
+        ("BuyingPower", cash),
         ("AccruedCash", "0"),
     ):
         collector.record(
@@ -133,6 +136,31 @@ def test_semantic_certificate_rejects_wrong_request_barrier(tmp_path) -> None:
         store.close()
 
 
+def test_account_amounts_change_component_and_combined_authority_hashes(tmp_path) -> None:
+    hashes: list[tuple[str, str]] = []
+    for index, cash in enumerate(("100000", "50000")):
+        store = IBKRFactStore(tmp_path / f"observer-{index}.sqlite3")
+        session = store.start_session(
+            host="127.0.0.1", port=7497, client_id=19, at=NOW + timedelta(seconds=index)
+        )
+        collector = IBKRCallbackCollector(
+            store,
+            session,
+            barrier=_barrier(),
+            configured_account=ACCOUNT,
+            base_currency="USD",
+            client_id=19,
+        )
+        _semantic_facts(collector, cash=cash)
+        certificate = collector.certificate(
+            store, at=NOW + timedelta(seconds=index), queue_drained=True, final_watermark=12
+        )
+        hashes.append((certificate.account_hash, certificate.semantic_hash))
+        store.close()
+    assert hashes[0][0] != hashes[1][0]
+    assert hashes[0][1] != hashes[1][1]
+
+
 def test_callback_threads_use_queue_and_single_sqlite_writer(tmp_path) -> None:
     path = tmp_path / "observer.sqlite3"
     store = IBKRFactStore(path)
@@ -198,6 +226,32 @@ def test_reducer_uses_native_order_identity_field_lattice_and_numeric_correction
         assert filled["avg_fill_price"] == "101"
         assert forward.effective_executions["trade.1"]["exec_id"] == "trade.1.10"
         assert forward.effective_commissions["trade.1"]["commission"] == "1.25"
+    finally:
+        store.close()
+
+
+def test_perm_id_zero_bracket_legs_remain_distinct_by_leg_order_ref(tmp_path) -> None:
+    store = IBKRFactStore(tmp_path / "observer.sqlite3")
+    session = store.start_session(host="127.0.0.1", port=7497, client_id=19, at=NOW)
+    collector = IBKRCallbackCollector(store, session, client_id=19)
+    try:
+        for order_id, parent_id, leg in ((10, 0, "P"), (11, 10, "T"), (12, 10, "S")):
+            payload = {
+                "order_id": order_id,
+                "parent_id": parent_id,
+                "client_id": 19,
+                "perm_id": 0,
+                "order_ref": f"HA:{'a' * 44}:{leg}",
+                "status": "Submitted",
+            }
+            collector.record(
+                IBKRFactType.OPEN_ORDER,
+                payload,
+                identity_key=collector.order_identity(payload),
+                at=NOW,
+            )
+        model = IBKRFactReducer.reduce(store.facts(session))
+        assert len(model.orders) == 3
     finally:
         store.close()
 
@@ -334,6 +388,7 @@ class _ObserverFakeApp:
                 "order_ref": "HA:" + "a" * 64,
                 "shares": "2",
                 "price": "100.25",
+                "time": "2023-12-31T23:59:59+00:00",
             },
             at=NOW,
         )
@@ -392,6 +447,8 @@ async def test_observer_has_no_prerequests_drains_and_builds_reconciliation_snap
         assert len(snapshot.protection_orders) == 2
         assert snapshot.protections == {"NVDA": 10}
         assert snapshot.events[0].commission == Decimal("1.25")
+        assert snapshot.events[0].occurred_at == NOW - timedelta(seconds=1)
+        assert snapshot.events[0].received_at == NOW
         first = control.register_snapshot_consensus(
             snapshot, at=NOW, minimum_interval=timedelta(seconds=1)
         )
@@ -401,7 +458,21 @@ async def test_observer_has_no_prerequests_drains_and_builds_reconciliation_snap
             minimum_interval=timedelta(seconds=1),
         )
         assert first == (False, 1)
-        assert second == (True, 2)
+        assert second == (False, 1)
+        independent = snapshot.model_copy(
+            update={
+                "as_of": snapshot.as_of + timedelta(seconds=2),
+                "completeness_certificate_id": canonical_hash({"certificate": "second"}),
+                "observation_id": canonical_hash({"observation": "second"}),
+                "session_id": canonical_hash({"session": "second"}),
+                "final_watermark": snapshot.final_watermark + 1,
+            }
+        )
+        assert control.register_snapshot_consensus(
+            independent,
+            at=NOW + timedelta(seconds=2),
+            minimum_interval=timedelta(seconds=1),
+        ) == (True, 2)
     finally:
         control.close()
         fact_store.close()

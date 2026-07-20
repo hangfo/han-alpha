@@ -13,7 +13,11 @@ def main() -> None:
     parser.add_argument("--destination", required=True, type=Path)
     parser.add_argument("--overwrite", action="store_true")
     arguments = parser.parse_args()
-    restore_databases(arguments.manifest, arguments.destination, overwrite=arguments.overwrite)
+    print(
+        restore_databases(
+            arguments.manifest, arguments.destination, overwrite=arguments.overwrite
+        )
+    )
 
 
 if __name__ == "__main__":

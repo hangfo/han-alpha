@@ -83,7 +83,11 @@ class Reconciler:
                     ),
                 )
                 self.store.connection.execute(
-                    "INSERT OR IGNORE INTO reconciliation_discrepancies VALUES (?, ?, ?, ?, ?, ?, NULL)",
+                    """INSERT OR IGNORE INTO reconciliation_discrepancies
+                       (discrepancy_id, run_id, severity, kind, entity_key, details_json,
+                        resolved_at, first_seen_at, last_seen_at, lifecycle_status,
+                        resolution_evidence)
+                       VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, 'OPEN', NULL)""",
                     (
                         discrepancy.discrepancy_id,
                         run_id,
@@ -91,6 +95,8 @@ class Reconciler:
                         discrepancy.kind,
                         discrepancy.entity_key,
                         json.dumps(discrepancy.details, sort_keys=True),
+                        at.isoformat(),
+                        at.isoformat(),
                     ),
                 )
             return ReconciliationReport(
@@ -100,12 +106,17 @@ class Reconciler:
                 frozen=True,
             )
         report = self.reconcile(snapshot, at=at)
-        self.store.record_broker_snapshot_authority(
+        promoted = self.store.record_broker_snapshot_authority(
             snapshot,
             reconciliation_run_id=report.run_id,
             reconciliation_status=report.status,
             at=at,
         )
+        if report.status == "CONVERGED" and not promoted:
+            self.store.open_freeze_ticket(
+                "BROKER_AUTHORITY_COMPONENTS_INCOMPLETE", source="reconciler", at=at
+            )
+            return report.model_copy(update={"status": "AUTHORITY_REJECTED", "frozen": True})
         return report
 
     def reconcile(self, snapshot: BrokerSnapshot, *, at: datetime) -> ReconciliationReport:
@@ -129,7 +140,11 @@ class Reconciler:
                     ),
                 )
                 self.store.connection.execute(
-                    "INSERT OR IGNORE INTO reconciliation_discrepancies VALUES (?, ?, ?, ?, ?, ?, NULL)",
+                    """INSERT OR IGNORE INTO reconciliation_discrepancies
+                       (discrepancy_id, run_id, severity, kind, entity_key, details_json,
+                        resolved_at, first_seen_at, last_seen_at, lifecycle_status,
+                        resolution_evidence)
+                       VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, 'OPEN', NULL)""",
                     (
                         discrepancy.discrepancy_id,
                         run_id,
@@ -137,6 +152,8 @@ class Reconciler:
                         discrepancy.kind,
                         discrepancy.entity_key,
                         json.dumps(discrepancy.details, sort_keys=True, separators=(",", ":")),
+                        at.isoformat(),
+                        at.isoformat(),
                     ),
                 )
             self.store.open_freeze_ticket(
@@ -362,7 +379,11 @@ class Reconciler:
         with self.store.connection:
             for item in discrepancies:
                 self.store.connection.execute(
-                    "INSERT OR IGNORE INTO reconciliation_discrepancies VALUES (?, ?, ?, ?, ?, ?, NULL)",
+                    """INSERT OR IGNORE INTO reconciliation_discrepancies
+                       (discrepancy_id, run_id, severity, kind, entity_key, details_json,
+                        resolved_at, first_seen_at, last_seen_at, lifecycle_status,
+                        resolution_evidence)
+                       VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, 'OPEN', NULL)""",
                     (
                         item.discrepancy_id,
                         run_id,
@@ -370,8 +391,37 @@ class Reconciler:
                         item.kind,
                         item.entity_key,
                         json.dumps(item.details, sort_keys=True, separators=(",", ":")),
+                        at.isoformat(),
+                        at.isoformat(),
                     ),
                 )
+                self.store.connection.execute(
+                    """UPDATE reconciliation_discrepancies
+                       SET last_seen_at=?, lifecycle_status='OPEN', resolved_at=NULL,
+                           resolution_evidence=NULL, run_id=?
+                       WHERE discrepancy_id=?""",
+                    (at.isoformat(), run_id, item.discrepancy_id),
+                )
+            current = {(item.kind, item.entity_key) for item in discrepancies}
+            open_rows = self.store.connection.execute(
+                """SELECT discrepancy_id, kind, entity_key
+                   FROM reconciliation_discrepancies WHERE lifecycle_status='OPEN'"""
+            ).fetchall()
+            for row in open_rows:
+                if (row["kind"], row["entity_key"]) not in current:
+                    self.store.connection.execute(
+                        """UPDATE reconciliation_discrepancies
+                           SET lifecycle_status='RESOLVED', resolved_at=?,
+                               resolution_evidence=? WHERE discrepancy_id=?""",
+                        (
+                            at.isoformat(),
+                            json.dumps(
+                                {"resolution": "absent_from_later_reconciliation", "run_id": run_id},
+                                sort_keys=True,
+                            ),
+                            row["discrepancy_id"],
+                        ),
+                    )
             self.store.connection.execute(
                 """UPDATE reconciliation_runs SET completed_at=?, status=?, summary_json=?
                    WHERE run_id=?""",

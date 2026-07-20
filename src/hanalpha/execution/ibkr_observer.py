@@ -32,6 +32,8 @@ class IBKRFactType(StrEnum):
     ACCOUNT_END = "ACCOUNT_END"
     OPEN_ORDER = "OPEN_ORDER"
     OPEN_ORDER_END = "OPEN_ORDER_END"
+    COMPLETED_ORDER = "COMPLETED_ORDER"
+    COMPLETED_ORDER_END = "COMPLETED_ORDER_END"
     ORDER_STATUS = "ORDER_STATUS"
     POSITION = "POSITION"
     POSITION_END = "POSITION_END"
@@ -67,6 +69,8 @@ class ObserverRequestBarrier(BaseModel):
     execution_history_start: datetime
     execution_history_end: datetime
     open_order_query: str = "ALL_OPEN_ORDERS"
+    execution_query_scope: str = "BROKER_DEFAULT_CURRENT_DAY"
+    completed_orders_requested: bool = False
 
 
 class VisibilityScope(BaseModel):
@@ -81,6 +85,7 @@ class VisibilityScope(BaseModel):
     other_api_clients_visible: bool
     execution_history_start: datetime
     execution_history_end: datetime
+    execution_query_scope: str
     open_order_query: str
     scope_hash: str
     scope_complete: bool
@@ -98,11 +103,13 @@ class SnapshotCompletenessCertificate(BaseModel):
     server_time_seen: bool
     account_end_seen: bool
     open_order_end_seen: bool
+    completed_order_end_seen: bool
     position_end_seen: bool
     execution_end_seen: bool
     request_ids_match: bool
     configured_account_seen: bool
     required_account_tags_seen: bool
+    base_currency: str
     base_currency_seen: bool
     account_scope_unambiguous: bool
     queue_drained: bool
@@ -112,7 +119,17 @@ class SnapshotCompletenessCertificate(BaseModel):
     executions_missing_commission_count: int = Field(ge=0)
     final_watermark: int = Field(ge=0)
     visibility: VisibilityScope
+    account_hash: str
+    orders_hash: str
+    positions_hash: str
+    executions_hash: str
+    commissions_hash: str
+    protection_hash: str
     semantic_hash: str
+    order_snapshot_complete: bool
+    position_snapshot_complete: bool
+    execution_snapshot_complete: bool
+    cash_snapshot_complete: bool
     critical_errors: tuple[int, ...] = ()
     disconnected: bool = False
     complete: bool
@@ -267,6 +284,9 @@ class IBKRFactStore:
 
     def close(self) -> None:
         self.connection.close()
+
+    def fact_count(self) -> int:
+        return int(self.connection.execute("SELECT COUNT(*) FROM ibkr_facts").fetchone()[0])
 
 
 class IBKRFactBridge:
@@ -509,6 +529,9 @@ class IBKRCallbackCollector:
             and fact.payload.get("epoch") == barrier.open_orders_epoch
             for fact in facts
         )
+        completed_end = any(
+            fact.fact_type == IBKRFactType.COMPLETED_ORDER_END for fact in facts
+        )
         account_facts = [
             fact
             for fact in facts
@@ -540,6 +563,9 @@ class IBKRCallbackCollector:
             "other_api_clients_visible": self.master_client,
             "execution_history_start": barrier.execution_history_start if barrier else at,
             "execution_history_end": barrier.execution_history_end if barrier else at,
+            "execution_query_scope": (
+                barrier.execution_query_scope if barrier else "UNDECLARED"
+            ),
             "open_order_query": barrier.open_order_query if barrier else "UNDECLARED",
         }
         scope_complete = configured_seen and managed_count == 1 and barrier is not None
@@ -557,6 +583,9 @@ class IBKRCallbackCollector:
             "server_time_seen": IBKRFactType.SERVER_TIME in kinds,
             "account_end_seen": account_end,
             "open_order_end_seen": open_end,
+            "completed_order_end_seen": (
+                completed_end if barrier and barrier.completed_orders_requested else True
+            ),
             "position_end_seen": position_end,
             "execution_end_seen": execution_end,
         }
@@ -564,17 +593,52 @@ class IBKRCallbackCollector:
         semantic = {
             "flags": flags,
             "visibility_scope_hash": visibility.scope_hash,
-            "account_tags": sorted(tags),
             "base_currency": self.base_currency,
-            "orders": self._semantic_payload(model.orders) if model else {},
-            "positions": self._semantic_payload(model.positions) if model else {},
-            "effective_executions": (
-                self._semantic_payload(model.effective_executions) if model else {}
-            ),
-            "effective_commissions": (
-                self._semantic_payload(model.effective_commissions) if model else {}
-            ),
         }
+        account_values = (
+            {
+                key: value
+                for key, value in self._semantic_payload(model.account_values).items()
+                if value.get("account_hash") == self.configured_account_hash
+            }
+            if model
+            else {}
+        )
+        orders = self._semantic_payload(model.orders) if model else {}
+        positions = self._semantic_payload(model.positions) if model else {}
+        executions = self._semantic_payload(model.effective_executions) if model else {}
+        commissions = self._semantic_payload(model.effective_commissions) if model else {}
+        protection = {
+            key: value
+            for key, value in orders.items()
+            if int(value.get("parent_id", 0) or 0) != 0
+        }
+        component_hashes = {
+            "account_hash": canonical_hash(account_values),
+            "orders_hash": canonical_hash(orders),
+            "positions_hash": canonical_hash(positions),
+            "executions_hash": canonical_hash(executions),
+            "commissions_hash": canonical_hash(commissions),
+            "protection_hash": canonical_hash(protection),
+        }
+        semantic.update(component_hashes)
+        order_complete = (
+            flags["open_order_end_seen"]
+            and flags["completed_order_end_seen"]
+            and queue_drained
+            and writer_error is None
+        )
+        position_complete = flags["position_end_seen"] and queue_drained and writer_error is None
+        execution_complete = flags["execution_end_seen"] and queue_drained and writer_error is None
+        cash_complete = (
+            flags["account_end_seen"]
+            and required_tags
+            and base_currency_seen
+            and missing_commission == 0
+            and unmatched == 0
+            and queue_drained
+            and writer_error is None
+        )
         complete = (
             all(flags.values())
             and request_ids_match
@@ -595,6 +659,7 @@ class IBKRCallbackCollector:
             "request_ids_match": request_ids_match,
             "configured_account_seen": configured_seen,
             "required_account_tags_seen": required_tags,
+            "base_currency": self.base_currency,
             "base_currency_seen": base_currency_seen,
             "account_scope_unambiguous": scope_complete,
             "queue_drained": queue_drained,
@@ -604,7 +669,12 @@ class IBKRCallbackCollector:
             "executions_missing_commission_count": missing_commission,
             "final_watermark": final_watermark,
             "visibility": visibility,
+            **component_hashes,
             "semantic_hash": canonical_hash(semantic),
+            "order_snapshot_complete": order_complete,
+            "position_snapshot_complete": position_complete,
+            "execution_snapshot_complete": execution_complete,
+            "cash_snapshot_complete": cash_complete,
             "critical_errors": errors,
             "disconnected": disconnected,
             "complete": complete,
@@ -657,7 +727,11 @@ class IBKRFactReducer:
             facts, key=lambda item: (item.fact_type.value, item.identity_key, item.fact_id)
         ):
             payload = {**fact.payload, "_received_at": fact.received_at.isoformat()}
-            if fact.fact_type in {IBKRFactType.OPEN_ORDER, IBKRFactType.ORDER_STATUS}:
+            if fact.fact_type in {
+                IBKRFactType.OPEN_ORDER,
+                IBKRFactType.COMPLETED_ORDER,
+                IBKRFactType.ORDER_STATUS,
+            }:
                 client_id = int(payload.get("client_id", 0) or 0)
                 order_id = int(payload.get("order_id") or 0)
                 perm_id = int(payload.get("perm_id", 0) or 0)

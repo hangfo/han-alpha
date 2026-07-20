@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 from hanalpha.domain.enums import OrderStatus, Side
@@ -242,8 +242,19 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
         self._observe(IBKRFactType.ACCOUNT_END, {"request_id": reqId}, key=str(reqId))
 
     def openOrder(self, orderId: int, contract: Contract, order: Order, orderState: Any) -> None:
-        payload = {
-            "order_id": orderId,
+        payload = self._order_payload(orderId, contract, order, orderState)
+        self._observe(
+            IBKRFactType.OPEN_ORDER,
+            payload,
+            key=self.observer.order_identity(payload) if self.observer else str(orderId),
+        )
+
+    @staticmethod
+    def _order_payload(
+        order_id: int, contract: Contract, order: Order, order_state: Any
+    ) -> dict[str, Any]:
+        return {
+            "order_id": order_id,
             "perm_id": int(getattr(order, "permId", 0)),
             "parent_id": int(getattr(order, "parentId", 0)),
             "client_id": int(getattr(order, "clientId", 0)),
@@ -263,13 +274,20 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
             "oca_group": str(getattr(order, "ocaGroup", "")),
             "outside_regular_hours": bool(getattr(order, "outsideRth", False)),
             "good_till_date": str(getattr(order, "goodTillDate", "")),
-            "status": str(getattr(orderState, "status", "")),
+            "status": str(getattr(order_state, "status", "")),
         }
+
+    def completedOrder(self, contract: Contract, order: Order, orderState: Any) -> None:
+        order_id = int(getattr(order, "orderId", 0))
+        payload = self._order_payload(order_id, contract, order, orderState)
         self._observe(
-            IBKRFactType.OPEN_ORDER,
+            IBKRFactType.COMPLETED_ORDER,
             payload,
-            key=self.observer.order_identity(payload) if self.observer else str(orderId),
+            key=self.observer.order_identity(payload) if self.observer else str(order_id),
         )
+
+    def completedOrdersEnd(self) -> None:
+        self._observe(IBKRFactType.COMPLETED_ORDER_END, {}, key="completed-orders-end")
 
     def openOrderEnd(self) -> None:
         epoch = self.observer.barrier.open_orders_epoch if self.observer and self.observer.barrier else ""
@@ -358,13 +376,23 @@ class IBKRBroker:
             at=started_at,
         )
         request_seed = int(session_id[:6], 16) % 100_000 + 10_000
+        execution_filter = ExecutionFilter()
+        execution_scope = "BROKER_DEFAULT_CURRENT_DAY"
+        if hasattr(execution_filter, "acctCode"):
+            execution_filter.acctCode = self.account
+        if hasattr(execution_filter, "time"):
+            execution_filter.time = started_at.strftime("%Y%m%d 00:00:00 UTC")
+            execution_scope = "FILTER_TIME_FROM_UTC_DAY_START"
+        completed_orders_requested = hasattr(self.app, "reqCompletedOrders")
         barrier = ObserverRequestBarrier(
             account_request_id=request_seed,
             execution_request_id=request_seed + 1,
             position_epoch=canonical_hash({"session": session_id, "request": "positions"}),
             open_orders_epoch=canonical_hash({"session": session_id, "request": "open-orders"}),
-            execution_history_start=started_at - timedelta(days=1),
+            execution_history_start=started_at.replace(hour=0, minute=0, second=0, microsecond=0),
             execution_history_end=started_at,
+            execution_query_scope=execution_scope,
+            completed_orders_requested=completed_orders_requested,
         )
         bridge = IBKRFactBridge(store.path)
         collector = IBKRCallbackCollector(
@@ -393,6 +421,11 @@ class IBKRBroker:
             ("EXECUTIONS", barrier.execution_request_id),
             ("POSITIONS", barrier.position_epoch),
             ("OPEN_ORDERS", barrier.open_orders_epoch),
+            *(
+                (("COMPLETED_ORDERS", session_id),)
+                if completed_orders_requested
+                else ()
+            ),
         ):
             collector.record(
                 IBKRFactType.REQUEST_START,
@@ -407,10 +440,9 @@ class IBKRBroker:
             "NetLiquidation,TotalCashValue,SettledCash,BuyingPower,AccruedCash",
         )
         self.app.reqAllOpenOrders()
+        if completed_orders_requested:
+            self.app.reqCompletedOrders(True)
         self.app.reqPositions()
-        execution_filter = ExecutionFilter()
-        if hasattr(execution_filter, "acctCode"):
-            execution_filter.acctCode = self.account
         self.app.reqExecutions(barrier.execution_request_id, execution_filter)
         deadline = time.monotonic() + timeout
         certificate: SnapshotCompletenessCertificate | None = None
@@ -423,7 +455,7 @@ class IBKRBroker:
                 queue_drained=drained,
                 queue_depth=bridge.depth,
                 writer_error=bridge.writer_error,
-                final_watermark=bridge.written,
+                final_watermark=store.fact_count(),
             )
             if certificate.complete:
                 break
@@ -453,7 +485,7 @@ class IBKRBroker:
             queue_drained=(bridge.depth == 0 and bridge.written == bridge.accepted),
             queue_depth=bridge.depth,
             writer_error=bridge.writer_error,
-            final_watermark=bridge.written,
+            final_watermark=store.fact_count(),
         )
         facts = store.facts(session_id)
         return certificate, IBKRFactReducer.reduce(facts)
@@ -535,7 +567,7 @@ class IBKRBroker:
         parent.totalQuantity = request.quantity
         parent.lmtPrice = request.limit_price
         parent.transmit = False
-        parent.orderRef = f"HA:{request.idempotency_key[:48]}"
+        parent.orderRef = f"HA:{request.idempotency_key[:44]}:P"
         if self.account:
             parent.account = self.account
 
@@ -547,7 +579,7 @@ class IBKRBroker:
         target.lmtPrice = request.target_price
         target.parentId = parent_id
         target.transmit = False
-        target.orderRef = f"HA:{request.idempotency_key[:48]}"
+        target.orderRef = f"HA:{request.idempotency_key[:44]}:T"
         if self.account:
             target.account = self.account
 
@@ -559,7 +591,7 @@ class IBKRBroker:
         stop.auxPrice = request.stop_price
         stop.parentId = parent_id
         stop.transmit = True
-        stop.orderRef = f"HA:{request.idempotency_key[:48]}"
+        stop.orderRef = f"HA:{request.idempotency_key[:44]}:S"
         if self.account:
             stop.account = self.account
 
@@ -604,7 +636,7 @@ class IBKRBroker:
         order.totalQuantity = quantity
         order.lmtPrice = limit_price
         order.transmit = True
-        order.orderRef = f"HA:{internal_id[:48]}"
+        order.orderRef = f"HA:{internal_id[:44]}:P"
         if self.account:
             order.account = self.account
         self.app.placeOrder(broker_id, contract, order)

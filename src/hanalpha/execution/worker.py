@@ -20,6 +20,12 @@ class ExecutionWorker:
         self.broker.advance_fence(lease.fencing_token)
 
     def dispatch_once(self, *, at: datetime) -> bool:
+        self.store.record_heartbeat(
+            "execution-worker",
+            status="OK",
+            at=at,
+            details={"fencing_token": self.lease.fencing_token},
+        )
         claimed = self.store.claim_next(self.lease, at=at)
         if claimed is None:
             return False
@@ -36,6 +42,12 @@ class ExecutionWorker:
         return True
 
     def dispatch_cancel_once(self, *, at: datetime) -> bool:
+        self.store.record_heartbeat(
+            "execution-worker",
+            status="OK",
+            at=at,
+            details={"fencing_token": self.lease.fencing_token},
+        )
         claimed = self.store.claim_next_cancel(self.lease, at=at)
         if claimed is None:
             return False

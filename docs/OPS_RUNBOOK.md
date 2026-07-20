@@ -14,11 +14,14 @@ In another shell:
 ```bash
 curl -fsS http://127.0.0.1:8000/health
 curl -fsS http://127.0.0.1:8000/ready
+curl -fsS http://127.0.0.1:8000/ready/service
+curl -fsS http://127.0.0.1:8000/ready/observer
+curl -fsS http://127.0.0.1:8000/ready/paper-canary
 curl -fsS http://127.0.0.1:8000/ops/overview
 curl -fsS http://127.0.0.1:8000/metrics
 ```
 
-`/health` proves only that the API process is alive. `/ready` is allowed to be false while startup reconciliation, Broker connectivity or market data is unavailable. Never route execution traffic based only on liveness.
+`/health` proves only that the API process is alive. `/ready` uses the strict Paper Canary gate; the three scoped endpoints distinguish service, Observer and Canary readiness. Never route execution traffic based only on liveness or API response freshness.
 
 For the dashboard:
 
@@ -55,7 +58,7 @@ python scripts/backup_state.py \
   --destination backups/han-alpha-YYYYMMDDTHHMMSSZ
 ```
 
-The command uses SQLite online backup, runs `integrity_check`, and writes a SHA-256 manifest. Copy the whole directory as one unit.
+The command uses SQLite online backup, runs `integrity_check`, and writes a cross-store SHA-256 manifest. Source databases must have unique names. Quiesce writers, or use an application-coordinated epoch, when a cross-database point-in-time snapshot is required.
 
 ## Restore drill
 
@@ -67,7 +70,7 @@ python scripts/restore_state.py \
   --destination .state/restore-drill
 ```
 
-Run `PRAGMA integrity_check`, start the API against the drill paths, and require startup reconciliation. `--overwrite` is reserved for an explicitly approved recovery after independent backup verification.
+Restore writes `generations/<generation_id>`, fsyncs every file and directory, then atomically switches `CURRENT`. Run `PRAGMA integrity_check`, start every service from the resolved `CURRENT` generation, and require startup reconciliation. `--overwrite` is reserved for an explicitly approved generation switch after independent backup verification.
 
 ## Restart and upgrade
 

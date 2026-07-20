@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Protocol
 
@@ -46,7 +46,9 @@ class IBKRBrokerSnapshotAdapter:
             for payload in read_model.account_values.values()
             if payload.get("account_hash") == expected_account
         }
-        base_currency = cls._base_currency(account_values)
+        base_currency = certificate.base_currency
+        if not base_currency or not certificate.base_currency_seen:
+            raise ValueError("broker base currency is not authoritative")
         cash = cls._account_value(account_values, "TotalCashValue", base_currency)
         by_numeric_id: dict[tuple[int, int], str] = {}
         key_by_identity: dict[str, str] = {}
@@ -97,7 +99,12 @@ class IBKRBrokerSnapshotAdapter:
                     }
                 )
             order_type = str(payload.get("order_type", "")).upper()
-            protection_type = "STOP" if order_type.startswith("STP") else "TARGET"
+            if order_type in {"STP", "STP LMT"}:
+                protection_type = "STOP"
+            elif order_type == "LMT":
+                protection_type = "TARGET"
+            else:
+                raise ValueError(f"unsupported broker child order type: {order_type or 'EMPTY'}")
             active = str(payload.get("status", "")).lower() not in {
                 "cancelled",
                 "apicancelled",
@@ -152,8 +159,22 @@ class IBKRBrokerSnapshotAdapter:
             currency_balances=currency_balances or {base_currency: cash},
             complete=certificate.complete,
             completeness_certificate_id=certificate.certificate_id,
+            observation_id=certificate.certificate_id,
+            session_id=certificate.session_id,
+            final_watermark=certificate.final_watermark,
             semantic_hash=certificate.semantic_hash,
             visibility_scope_hash=certificate.visibility.scope_hash,
+            account_hash=certificate.account_hash,
+            orders_hash=certificate.orders_hash,
+            positions_hash=certificate.positions_hash,
+            executions_hash=certificate.executions_hash,
+            commissions_hash=certificate.commissions_hash,
+            protection_hash=certificate.protection_hash,
+            order_snapshot_complete=certificate.order_snapshot_complete,
+            position_snapshot_complete=certificate.position_snapshot_complete,
+            execution_snapshot_complete=certificate.execution_snapshot_complete,
+            cash_snapshot_complete=certificate.cash_snapshot_complete,
+            commission_pending_count=certificate.executions_missing_commission_count,
             orders=tuple(sorted(broker_orders, key=lambda item: item.broker_order_id)),
             positions=positions,
             protections=symbol_protections,
@@ -199,7 +220,18 @@ class IBKRBrokerSnapshotAdapter:
             commission = model.effective_commissions.get(root, {})
             quantity = cls._int_quantity(execution.get("shares", 0))
             received_at = cls._received_at(execution, as_of)
-            raw = {"execution": execution, "commission": commission}
+            occurred_at, parse_status, broker_timezone = cls._broker_time(
+                execution.get("time"), received_at
+            )
+            raw = {
+                "execution": execution,
+                "commission": commission,
+                "broker_time_parse_status": parse_status,
+                "broker_timezone": broker_timezone,
+                "clock_skew_ms": max(
+                    0, int((received_at - occurred_at).total_seconds() * 1000)
+                ),
+            }
             events.append(
                 BrokerEvent(
                     broker_event_id=canonical_hash({"ibkr_exec_id": exec_id, "raw": raw}),
@@ -210,7 +242,7 @@ class IBKRBrokerSnapshotAdapter:
                     filled_quantity=quantity,
                     fill_price=Decimal(str(execution.get("price", "0"))),
                     commission=Decimal(str(commission.get("commission", "0") or "0")),
-                    occurred_at=received_at,
+                    occurred_at=occurred_at,
                     received_at=received_at,
                     raw_payload_hash=canonical_hash(raw),
                 )
@@ -223,7 +255,10 @@ class IBKRBrokerSnapshotAdapter:
     ) -> str | None:
         if not order_ref.startswith("HA:"):
             return None
-        prefix = order_ref.removeprefix("HA:")
+        encoded = order_ref.removeprefix("HA:")
+        prefix, separator, leg = encoded.rpartition(":")
+        if not (separator and leg in {"P", "T", "S"}):
+            prefix = encoded
         if len(prefix) == 64:
             return prefix
         return resolver.resolve_client_order_prefix(prefix) if resolver else None
@@ -238,15 +273,6 @@ class IBKRBrokerSnapshotAdapter:
         return cls._key_from_ref(str(payload.get("order_ref", "")), resolver) or canonical_hash(
             {"broker_order_identity": identity}
         )
-
-    @staticmethod
-    def _base_currency(values: dict[tuple[str, str], Decimal]) -> str:
-        currencies = {
-            currency
-            for tag, currency in values
-            if tag == "TotalCashValue" and currency not in {"BASE", ""}
-        }
-        return sorted(currencies)[0] if len(currencies) == 1 else "USD"
 
     @classmethod
     def _account_value(
@@ -279,3 +305,22 @@ class IBKRBrokerSnapshotAdapter:
     def _received_at(payload: dict[str, Any], fallback: datetime) -> datetime:
         raw = payload.get("_received_at")
         return datetime.fromisoformat(str(raw)) if raw else fallback
+
+    @staticmethod
+    def _broker_time(value: Any, fallback: datetime) -> tuple[datetime, str, str | None]:
+        raw = str(value or "").strip()
+        if not raw:
+            return fallback, "MISSING_FALLBACK_RECEIVED_AT", None
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is not None:
+                return parsed.astimezone(UTC), "PARSED_OFFSET", str(parsed.tzinfo)
+        except ValueError:
+            pass
+        if raw.endswith(" UTC"):
+            try:
+                parsed = datetime.strptime(raw, "%Y%m%d %H:%M:%S UTC").replace(tzinfo=UTC)
+                return parsed, "PARSED_UTC", "UTC"
+            except ValueError:
+                pass
+        return fallback, "AMBIGUOUS_FALLBACK_RECEIVED_AT", None

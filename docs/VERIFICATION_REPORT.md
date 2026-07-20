@@ -1,5 +1,19 @@
 # Verification report
 
+## M7-A authority hardening and M7-B read-only operations - 2026-07-20
+
+VERIFIED locally: non-replayable independent Snapshot voting; account/order/position/execution/commission/protection component hashes; complete-CONVERGED-only Authority promotion; system-generated persisted Quote Capsules and ID-only Arm; Bracket leg identity; Completed Orders facts; explicit execution scope; Broker occurred/received time separation; discrepancy lifecycle; layered readiness and expanded metrics; Authority/freshness/burn-in dashboard; cross-store manifest and atomic Generation Restore with interruption tests.
+
+BLOCKED externally: official authenticated IBKR Paper callbacks, market-data entitlement and exchange-session authority, 30-session zero-write burn-in, TWS/process/nightly resets, Golden Tape corpus, durable real cancel/bracket recovery, one-use Canary Permit, production alert delivery, quiesced production restore drill, and real survivor-bias-free PIT Alpha evidence.
+
+NOT IMPLEMENTED: browser mutation controls, unattended Paper/Live trading, durable IBKR write adapter, deployed Playwright/topology acceptance, or any claim of proven profitability.
+
+Detailed review decisions: `docs/v2-plan/15_M7A_REVIEW_AND_M7B_DECISIONS_ZH.md`.
+
+Canonical local verification: `preflight: OK`; Ruff and strict mypy PASS; 192 Python tests PASS at 85.07% branch coverage with two-decimal enforcement; package/CLI/API/synthetic/backtest smoke PASS; 2 Vitest tests PASS; TypeScript strict/lint and Vite production build PASS; `npm audit --audit-level=high` reports 0 vulnerabilities. Browser QA is recorded after the source-backed local API validation.
+
+Browser QA: the in-app browser loaded the Vite dashboard against the real local FastAPI `/ops/overview`; the DOM exposed all five readiness layers, independent fact ages, Authority candidates, discrepancy lifecycle, backup and burn-in empty states. API calls returned 200, document width equaled viewport width, and browser logs contained no warning or error. Narrow/deployed topology Playwright remains NOT IMPLEMENTED.
+
 ## M6 audit hardening and M7-A read-only operations - 2026-07-20
 
 VERIFIED locally: callback Queue single-writer and clean drain, transport-only Observer startup, semantic request barriers and visibility scope, native IBKR identity/reducer, M5 BrokerSnapshot adapter, two-snapshot consensus, Cash Bridge baseline epochs, two-stage approve/arm, fenced durable cancel, schedule-aware reality gaps, liveness/readiness, Ops metrics/dashboard unit tests, and hash/integrity checked backup-restore drill.

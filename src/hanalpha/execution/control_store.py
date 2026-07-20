@@ -16,6 +16,7 @@ from hanalpha.execution.control_models import (
     ExecutionStatus,
     OutboxCommand,
     OutboxStatus,
+    QuoteSnapshot,
     ReservationStatus,
     RiskReservation,
 )
@@ -128,6 +129,24 @@ class DurableExecutionStore:
               consecutive_count INTEGER NOT NULL, first_seen_at TEXT NOT NULL,
               last_seen_at TEXT NOT NULL, last_certificate_id TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS broker_snapshot_votes (
+              observation_id TEXT PRIMARY KEY, certificate_id TEXT NOT NULL,
+              session_id TEXT NOT NULL, visibility_scope_hash TEXT NOT NULL,
+              semantic_hash TEXT NOT NULL, snapshot_as_of TEXT NOT NULL,
+              final_watermark INTEGER NOT NULL, recorded_at TEXT NOT NULL,
+              disposition TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS broker_authority_candidates (
+              certificate_id TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL,
+              reconciliation_run_id TEXT NOT NULL, reconciliation_status TEXT NOT NULL,
+              promotion_status TEXT NOT NULL, policy_reason TEXT NOT NULL,
+              recorded_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS quote_snapshots (
+              quote_snapshot_id TEXT PRIMARY KEY, symbol TEXT NOT NULL,
+              quote_json TEXT NOT NULL, observed_at TEXT NOT NULL,
+              provider_timestamp TEXT NOT NULL, recorded_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS cash_bridge_events (
               bridge_id TEXT PRIMARY KEY, event_type TEXT NOT NULL, amount TEXT NOT NULL,
               currency TEXT NOT NULL, occurred_at TEXT NOT NULL, evidence_json TEXT NOT NULL,
@@ -140,7 +159,8 @@ class DurableExecutionStore:
             CREATE TABLE IF NOT EXISTS reconciliation_discrepancies (
               discrepancy_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, severity TEXT NOT NULL,
               kind TEXT NOT NULL, entity_key TEXT NOT NULL, details_json TEXT NOT NULL,
-              resolved_at TEXT
+              resolved_at TEXT, first_seen_at TEXT, last_seen_at TEXT,
+              lifecycle_status TEXT NOT NULL DEFAULT 'OPEN', resolution_evidence TEXT
             );
             CREATE TABLE IF NOT EXISTS no_trade_ledger (
               outcome_id TEXT PRIMARY KEY, decision_id TEXT NOT NULL, reason_code TEXT NOT NULL,
@@ -196,6 +216,20 @@ class DurableExecutionStore:
             if name not in baseline_columns:
                 self.connection.execute(
                     f"ALTER TABLE broker_account_baseline ADD COLUMN {name} {declaration}"
+                )
+        discrepancy_columns = {
+            row["name"]
+            for row in self.connection.execute("PRAGMA table_info(reconciliation_discrepancies)")
+        }
+        for name, declaration in (
+            ("first_seen_at", "TEXT"),
+            ("last_seen_at", "TEXT"),
+            ("lifecycle_status", "TEXT NOT NULL DEFAULT 'OPEN'"),
+            ("resolution_evidence", "TEXT"),
+        ):
+            if name not in discrepancy_columns:
+                self.connection.execute(
+                    f"ALTER TABLE reconciliation_discrepancies ADD COLUMN {name} {declaration}"
                 )
         self.connection.commit()
         if not self.connection.execute(
@@ -404,12 +438,13 @@ class DurableExecutionStore:
         self,
         intent_id: str,
         *,
-        broker_snapshot_hash: str,
-        quote_hash: str,
-        current_limit_price: Decimal,
+        authority_id: str,
+        quote_snapshot_id: str,
         max_drift_bps: Decimal,
         at: datetime,
         expires_at: datetime,
+        authority_max_age: timedelta = timedelta(seconds=30),
+        quote_max_age: timedelta = timedelta(seconds=5),
     ) -> str:
         """Bind approval to fresh broker/quote truth before creating the submit outbox."""
         try:
@@ -425,17 +460,68 @@ class DurableExecutionStore:
                 raise ExecutionInvariantError("intent is not approved")
             if expires_at <= at:
                 raise ExecutionInvariantError("approval arm is already expired")
-            authority = self.latest_broker_snapshot_authority()
-            if authority is None or authority["semantic_hash"] != broker_snapshot_hash:
+            if expires_at > at + quote_max_age:
+                raise ExecutionInvariantError("approval arm TTL exceeds quote freshness policy")
+            if max_drift_bps > Decimal("10"):
+                raise ExecutionInvariantError("approval arm drift exceeds system policy")
+            authority = self.connection.execute(
+                "SELECT * FROM broker_snapshot_authority WHERE certificate_id=? AND reconciliation_status='CONVERGED'",
+                (authority_id,),
+            ).fetchone()
+            if authority is None:
                 raise ExecutionInvariantError("broker snapshot authority is stale or unknown")
+            authority_age = at - datetime.fromisoformat(authority["snapshot_as_of"])
+            if authority_age < timedelta(0) or authority_age > authority_max_age:
+                self.open_freeze_ticket(
+                    "BROKER_AUTHORITY_STALE",
+                    source="approval_arm",
+                    at=at,
+                    in_transaction=True,
+                )
+                self.connection.commit()
+                raise ExecutionInvariantError("broker snapshot authority exceeded maximum age")
+            snapshot = BrokerSnapshot.model_validate_json(authority["snapshot_json"])
+            if not (
+                snapshot.complete
+                and snapshot.order_snapshot_complete
+                and snapshot.position_snapshot_complete
+                and snapshot.execution_snapshot_complete
+                and snapshot.cash_snapshot_complete
+                and snapshot.commission_pending_count == 0
+            ):
+                raise ExecutionInvariantError("broker authority components are incomplete")
+            quote_row = self.connection.execute(
+                "SELECT quote_json FROM quote_snapshots WHERE quote_snapshot_id=?",
+                (quote_snapshot_id,),
+            ).fetchone()
+            if quote_row is None:
+                raise ExecutionInvariantError("quote snapshot is unknown")
+            quote = QuoteSnapshot.model_validate_json(quote_row["quote_json"])
+            quote_age = at - quote.observed_at
+            if quote_age < timedelta(0) or quote_age > quote_max_age:
+                self.open_freeze_ticket(
+                    "MARKET_QUOTE_STALE",
+                    source="approval_arm",
+                    at=at,
+                    in_transaction=True,
+                )
+                self.connection.commit()
+                raise ExecutionInvariantError("quote snapshot exceeded maximum age")
             intent = ExecutionIntent.model_validate_json(row["intent_json"])
+            if quote.symbol != intent.instrument_id:
+                raise ExecutionInvariantError("quote symbol does not match intent")
+            if quote.market_phase not in {"REGULAR", "OPEN"}:
+                raise ExecutionInvariantError("quote market phase is not eligible for arming")
+            current_limit_price = quote.ask if intent.side.value == "BUY" else quote.bid
             drift_bps = abs(current_limit_price - intent.limit_price) / intent.limit_price * 10_000
             if drift_bps > max_drift_bps:
                 raise ExecutionInvariantError("quote drift exceeds approval arm limit")
             document = {
                 "intent_id": intent_id,
-                "broker_snapshot_hash": broker_snapshot_hash,
-                "quote_hash": quote_hash,
+                "authority_id": authority_id,
+                "broker_snapshot_hash": authority["semantic_hash"],
+                "quote_snapshot_id": quote_snapshot_id,
+                "quote_hash": quote.raw_hash,
                 "approved_limit_price": str(current_limit_price),
                 "max_drift_bps": str(max_drift_bps),
                 "armed_at": at.isoformat(),
@@ -454,8 +540,8 @@ class DurableExecutionStore:
                 (
                     arm_id,
                     intent_id,
-                    broker_snapshot_hash,
-                    quote_hash,
+                    authority["semantic_hash"],
+                    quote.raw_hash,
                     str(current_limit_price),
                     str(max_drift_bps),
                     at.isoformat(),
@@ -1166,24 +1252,71 @@ class DurableExecutionStore:
             and snapshot.semantic_hash
             and snapshot.visibility_scope_hash
             and snapshot.completeness_certificate_id
+            and snapshot.observation_id
+            and snapshot.session_id
+            and snapshot.final_watermark > 0
         ):
             return False, 0
         try:
             self.connection.execute("BEGIN IMMEDIATE")
+            duplicate = self.connection.execute(
+                "SELECT disposition FROM broker_snapshot_votes WHERE observation_id=?",
+                (snapshot.observation_id,),
+            ).fetchone()
             row = self.connection.execute(
                 "SELECT * FROM broker_snapshot_consensus WHERE visibility_scope_hash=?",
                 (snapshot.visibility_scope_hash,),
             ).fetchone()
+            if duplicate is not None:
+                self.connection.rollback()
+                duplicate_count = int(row["consecutive_count"]) if row is not None else 0
+                return duplicate_count >= 2, duplicate_count
             count = 1
             first_seen = at
-            if row is not None and row["semantic_hash"] == snapshot.semantic_hash:
-                last_seen = datetime.fromisoformat(row["last_seen_at"])
-                if at - last_seen >= minimum_interval:
+            disposition = "ACCEPTED_FIRST"
+            previous = self.connection.execute(
+                """SELECT * FROM broker_snapshot_votes
+                   WHERE visibility_scope_hash=? AND disposition LIKE 'ACCEPTED%'
+                   ORDER BY snapshot_as_of DESC, recorded_at DESC LIMIT 1""",
+                (snapshot.visibility_scope_hash,),
+            ).fetchone()
+            if previous is not None and previous["semantic_hash"] == snapshot.semantic_hash:
+                previous_as_of = datetime.fromisoformat(previous["snapshot_as_of"])
+                independent = (
+                    previous["certificate_id"] != snapshot.completeness_certificate_id
+                    and previous["session_id"] != snapshot.session_id
+                    and snapshot.as_of > previous_as_of
+                    and snapshot.final_watermark > int(previous["final_watermark"])
+                    and snapshot.as_of - previous_as_of >= minimum_interval
+                )
+                if independent:
                     count = int(row["consecutive_count"]) + 1
                     first_seen = datetime.fromisoformat(row["first_seen_at"])
+                    disposition = "ACCEPTED_INDEPENDENT"
                 else:
-                    count = int(row["consecutive_count"])
-                    first_seen = datetime.fromisoformat(row["first_seen_at"])
+                    count = int(row["consecutive_count"]) if row is not None else 1
+                    first_seen = (
+                        datetime.fromisoformat(row["first_seen_at"])
+                        if row is not None
+                        else at
+                    )
+                    disposition = "REJECTED_NON_INDEPENDENT"
+            elif previous is not None:
+                disposition = "ACCEPTED_DIVERGENT_RESET"
+            self.connection.execute(
+                "INSERT INTO broker_snapshot_votes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    snapshot.observation_id,
+                    snapshot.completeness_certificate_id,
+                    snapshot.session_id,
+                    snapshot.visibility_scope_hash,
+                    snapshot.semantic_hash,
+                    snapshot.as_of.isoformat(),
+                    snapshot.final_watermark,
+                    at.isoformat(),
+                    disposition,
+                ),
+            )
             self.connection.execute(
                 """INSERT INTO broker_snapshot_consensus VALUES (?, ?, ?, ?, ?, ?)
                    ON CONFLICT(visibility_scope_hash) DO UPDATE SET
@@ -1214,14 +1347,45 @@ class DurableExecutionStore:
         reconciliation_run_id: str,
         reconciliation_status: str,
         at: datetime,
-    ) -> None:
+    ) -> bool:
         if not (
             snapshot.completeness_certificate_id
             and snapshot.semantic_hash
             and snapshot.visibility_scope_hash
         ):
             raise ExecutionInvariantError("broker snapshot authority metadata is incomplete")
+        components_complete = (
+            snapshot.complete
+            and snapshot.order_snapshot_complete
+            and snapshot.position_snapshot_complete
+            and snapshot.execution_snapshot_complete
+            and snapshot.cash_snapshot_complete
+            and snapshot.commission_pending_count == 0
+        )
+        promoted = reconciliation_status == "CONVERGED" and components_complete
         with self.connection:
+            self.connection.execute(
+                "INSERT OR REPLACE INTO broker_authority_candidates VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    snapshot.completeness_certificate_id,
+                    snapshot.model_dump_json(),
+                    reconciliation_run_id,
+                    reconciliation_status,
+                    "PROMOTED" if promoted else "REJECTED",
+                    (
+                        "policy_converged"
+                        if promoted
+                        else (
+                            "authority_components_incomplete"
+                            if reconciliation_status == "CONVERGED"
+                            else "reconciliation_not_converged"
+                        )
+                    ),
+                    at.isoformat(),
+                ),
+            )
+            if not promoted:
+                return False
             self.connection.execute(
                 "INSERT OR REPLACE INTO broker_snapshot_authority VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
@@ -1235,13 +1399,80 @@ class DurableExecutionStore:
                     at.isoformat(),
                 ),
             )
+        return True
 
-    def latest_broker_snapshot_authority(self) -> sqlite3.Row | None:
+    def latest_broker_snapshot_authority(
+        self, *, at: datetime | None = None, max_age: timedelta | None = None
+    ) -> sqlite3.Row | None:
         row = self.connection.execute(
-            "SELECT * FROM broker_snapshot_authority ORDER BY snapshot_as_of DESC LIMIT 1"
+            """SELECT * FROM broker_snapshot_authority
+               WHERE reconciliation_status='CONVERGED'
+               ORDER BY snapshot_as_of DESC LIMIT 1"""
         ).fetchone()
+        if row is not None and at is not None and max_age is not None:
+            age = at - datetime.fromisoformat(row["snapshot_as_of"])
+            if age < timedelta(0) or age > max_age:
+                return None
         assert row is None or isinstance(row, sqlite3.Row)
         return row
+
+    def record_quote_snapshot(
+        self,
+        *,
+        symbol: str,
+        bid: Decimal,
+        ask: Decimal,
+        last: Decimal | None,
+        observed_at: datetime,
+        provider_timestamp: datetime,
+        provider: str,
+        feed_mode: str,
+        market_phase: str,
+        recorded_at: datetime | None = None,
+    ) -> QuoteSnapshot:
+        raw_hash = canonical_hash(
+            {
+                "symbol": symbol,
+                "bid": str(bid),
+                "ask": str(ask),
+                "last": str(last) if last is not None else None,
+                "provider_timestamp": provider_timestamp,
+                "provider": provider,
+                "feed_mode": feed_mode,
+            }
+        )
+        freshness_policy_hash = canonical_hash(
+            {"quote_max_age_seconds": 5, "eligible_market_phases": ["OPEN", "REGULAR"]}
+        )
+        body = {
+            "symbol": symbol,
+            "bid": str(bid),
+            "ask": str(ask),
+            "last": str(last) if last is not None else None,
+            "observed_at": observed_at,
+            "provider_timestamp": provider_timestamp,
+            "provider": provider,
+            "feed_mode": feed_mode,
+            "market_phase": market_phase,
+            "raw_hash": raw_hash,
+            "freshness_policy_hash": freshness_policy_hash,
+        }
+        quote = QuoteSnapshot.model_validate(
+            {"quote_snapshot_id": canonical_hash(body), **body}
+        )
+        with self.connection:
+            self.connection.execute(
+                "INSERT OR IGNORE INTO quote_snapshots VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    quote.quote_snapshot_id,
+                    symbol,
+                    quote.model_dump_json(),
+                    observed_at.isoformat(),
+                    provider_timestamp.isoformat(),
+                    (recorded_at or datetime.now(UTC)).isoformat(),
+                ),
+            )
+        return quote
 
     def record_cash_bridge(
         self,

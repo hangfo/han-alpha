@@ -77,7 +77,7 @@ reservation-aware账户容量。M6只读事实带与完整性证书也已通过�
 - [x] Ruff通过。
 - [x] Mypy strict通过。
 - [x] 后端分支覆盖率至少85%。
-- [ ] 前端测试通过。
+- [x] 前端测试通过。
 - [x] package build通过。
 - [ ] Docker Compose健康启动。
 - [ ] secret scan、dependency audit和基础SAST无高危未处理项。
@@ -85,11 +85,11 @@ reservation-aware账户容量。M6只读事实带与完整性证书也已通过�
 
 ## 9. 运维
 
-- [ ] health与readiness区分。
-- [ ] worker和broker心跳可见。
-- [ ] 数据库备份与恢复演练有脚本和测试记录。
-- [ ] 账本错配产生告警和reconciliation事件。
-- [ ] 运行手册覆盖启动、停止、升级、重启、灾难恢复和Paper对账。
+- [x] health与readiness区分。
+- [x] worker和broker心跳可见。
+- [x] 数据库备份与恢复演练有脚本和测试记录。
+- [x] 账本错配产生告警和reconciliation事件。
+- [x] 运行手册覆盖启动、停止、升级、重启、灾难恢复和Paper对账。
 
 ## 10. 文档与诚实性
 

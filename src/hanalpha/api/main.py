@@ -26,10 +26,9 @@ class ApprovalRequest(BaseModel):
 
 
 class ApprovalArmRequest(BaseModel):
-    broker_snapshot_hash: str = Field(min_length=64, max_length=64)
-    quote_hash: str = Field(min_length=64, max_length=64)
-    current_limit_price: Decimal = Field(gt=0)
-    max_drift_bps: Decimal = Field(gt=0, le=100)
+    authority_id: str = Field(min_length=64, max_length=64)
+    quote_snapshot_id: str = Field(min_length=64, max_length=64)
+    max_drift_bps: Decimal = Field(gt=0, le=10)
     expires_at: datetime
 
 
@@ -101,6 +100,24 @@ async def health() -> dict[str, Any]:
 async def ready() -> dict[str, Any]:
     system = get_system()
     return get_ops().readiness(await system.status())
+
+
+@app.get("/ready/service")
+async def ready_service() -> dict[str, Any]:
+    result = get_ops().readiness(await get_system().status())
+    return {"as_of": result["as_of"], **result["layers"]["service"]}
+
+
+@app.get("/ready/observer")
+async def ready_observer() -> dict[str, Any]:
+    result = get_ops().readiness(await get_system().status())
+    return {"as_of": result["as_of"], **result["layers"]["observer"]}
+
+
+@app.get("/ready/paper-canary")
+async def ready_paper_canary() -> dict[str, Any]:
+    result = get_ops().readiness(await get_system().status())
+    return {"as_of": result["as_of"], **result["layers"]["paper_canary"]}
 
 
 @app.get("/ops/overview")
@@ -208,9 +225,8 @@ async def arm_intent(
     try:
         arm_id = get_system().execution_store.arm_approved_intent(
             intent_id,
-            broker_snapshot_hash=request.broker_snapshot_hash,
-            quote_hash=request.quote_hash,
-            current_limit_price=request.current_limit_price,
+            authority_id=request.authority_id,
+            quote_snapshot_id=request.quote_snapshot_id,
             max_drift_bps=request.max_drift_bps,
             at=datetime.now(UTC),
             expires_at=request.expires_at,

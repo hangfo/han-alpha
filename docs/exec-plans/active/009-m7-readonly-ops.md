@@ -1,6 +1,6 @@
 # M7-A execution plan: read-only operations surface
 
-Status: LOCAL COMPLETE; external deployment and write controls BLOCKED
+Status: SUPERSEDED BY 010; M7-A LOCAL COMPLETE
 Last updated: 2026-07-20
 
 ## Delivered
@@ -10,7 +10,7 @@ Last updated: 2026-07-20
 - Worker/component heartbeat persistence and visibility.
 - Observer certificate, reconciliation, execution uncertainty, protection and reality-gap projections.
 - React + TypeScript strict, responsive, read-only dashboard with loading/error/empty/stale semantics and unit tests.
-- Consistent SQLite online backup, hash manifest, integrity verification and atomic restore scripts.
+- Consistent SQLite online backup, hash manifest and integrity verification. M7-B upgrades restore to an atomic Generation pointer.
 
 ## Safety boundary
 
@@ -22,3 +22,5 @@ The first dashboard is read-only. Existing mutation APIs remain default-off and 
 - BLOCKED: real backup/restore drill against stopped production services.
 - NOT IMPLEMENTED: authenticated browser session, CSRF and destructive-action UI.
 - NOT IMPLEMENTED: mobile read-only acceptance and Playwright against deployed topology.
+
+Review hardening and the next read-only slice are tracked in `010-m7b-authority-operations.md`.

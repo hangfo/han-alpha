@@ -273,10 +273,51 @@ class BrokerSnapshot(BaseModel):
     currency_balances: dict[str, Decimal] = Field(default_factory=dict)
     complete: bool = True
     completeness_certificate_id: str | None = None
+    observation_id: str | None = None
+    session_id: str | None = None
+    final_watermark: int = Field(default=0, ge=0)
     semantic_hash: str | None = None
     visibility_scope_hash: str | None = None
+    account_hash: str | None = None
+    orders_hash: str | None = None
+    positions_hash: str | None = None
+    executions_hash: str | None = None
+    commissions_hash: str | None = None
+    protection_hash: str | None = None
+    order_snapshot_complete: bool = True
+    position_snapshot_complete: bool = True
+    execution_snapshot_complete: bool = True
+    cash_snapshot_complete: bool = True
+    commission_pending_count: int = Field(default=0, ge=0)
     orders: tuple[BrokerOrderTruth, ...]
     positions: dict[str, int]
     protections: dict[str, int]
     events: tuple[BrokerEvent, ...]
     protection_orders: tuple[BrokerProtectionTruth, ...] = ()
+
+
+class QuoteSnapshot(BaseModel):
+    """Immutable, provider-attributed quote evidence used by the arm admission gate."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    quote_snapshot_id: str = Field(pattern=HASH_PATTERN)
+    symbol: str = Field(min_length=1)
+    bid: Decimal = Field(gt=0)
+    ask: Decimal = Field(gt=0)
+    last: Decimal | None = Field(default=None, gt=0)
+    observed_at: datetime
+    provider_timestamp: datetime
+    provider: str = Field(min_length=1)
+    feed_mode: str
+    market_phase: str
+    raw_hash: str = Field(pattern=HASH_PATTERN)
+    freshness_policy_hash: str = Field(pattern=HASH_PATTERN)
+
+    @model_validator(mode="after")
+    def validate_quote(self) -> QuoteSnapshot:
+        require_aware(self.observed_at, "observed_at")
+        require_aware(self.provider_timestamp, "provider_timestamp")
+        if self.ask < self.bid:
+            raise ValueError("quote ask must be greater than or equal to bid")
+        return self

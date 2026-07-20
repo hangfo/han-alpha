@@ -71,6 +71,7 @@ omit = []
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
+precision = 2
 fail_under = 85
 
 [[tool.mypy.overrides]]

@@ -1,6 +1,6 @@
 # Active execution plan: complete Han Alpha platform
 
-Status: ACTIVE; M6 hardened locally, M7-A read-only Ops complete locally, external gates blocked
+Status: ACTIVE; M6 Authority hardened locally, M7-B read-only Ops complete locally, external gates blocked
 Owner: Codex
 Last updated: 2026-07-19
 
@@ -27,7 +27,7 @@ Codex must rerun and replace these statements with current command evidence.
 - [x] M4 LLM Evidence Service, caching, budgets and ablation
 - [x] M5 durable execution control plane and Fake Broker
 - [ ] M6 IBKR Paper integration and observation (local hardening complete; real burn-in blocked)
-- [ ] M7 Ops Dashboard, observability and recovery operations (read-only local slice complete)
+- [ ] M7 Ops Dashboard, observability and recovery operations (M7-B read-only local slice complete; deployed operations blocked)
 - [ ] M8 Live Proposal independent review
 
 ## Decision log
@@ -43,6 +43,7 @@ Record important decisions here with date, alternatives, and consequences. Do no
 - 2026-07-19: M4 audit amendments fixed the raw Responses boundary, backend citation resolution, review binding, ablation arithmetic, cache/audit scope and no-trade promotion. M5 added the durable capsule/reservation/outbox/inbox/single-writer/Fake-Broker/reconciliation control plane and removed direct new-exposure Broker submission from the runtime. No real Provider or Broker call was made. M6 is authorized only for explicit IBKR Paper integration and observation.
 - 2026-07-19: M5 review hardening unified durable freeze authority, closed fencing/Unknown/cash/protection/account-read gaps and removed in-memory pending orders. M6-A through M6-E now have a local read-only fact-tape, completeness-certificate, reducer and shadow-gap kernel. Real Paper burn-in and M6-F remain blocked; no Broker write was made.
 - 2026-07-20: M6 audit hardening added callback Queue single-writer, transport-only observation, semantic request barriers, visibility scope, native identity, M5 snapshot adapter, two-snapshot consensus, cash epochs, two-stage approve/arm, durable cancel and schedule-aware reality gaps. M7-A added source-backed read-only Ops API/dashboard plus backup/restore. No Provider or Broker write was made; real Paper burn-in remains blocked.
+- 2026-07-20: M7-A review hardening made Snapshot consensus non-replayable, split component Authority hashes, restricted promotion to complete CONVERGED candidates, replaced caller-reported quote evidence with persisted Quote Capsules, separated Bracket leg identity, added Completed Orders facts, discrepancy lifecycle and Generation Restore. M7-B added layered readiness, fact-age status, Authority timeline, backup and honest burn-in progress. No Provider or Broker write was made.
 
 ## Verification log
 

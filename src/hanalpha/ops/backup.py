@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 
 def file_sha256(path: Path) -> str:
@@ -16,8 +18,25 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _canonical_hash(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _fsync_path(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def backup_databases(sources: tuple[Path, ...], destination: Path) -> Path:
-    """Create consistent SQLite online backups and a hash manifest."""
+    """Create one validated cross-store backup generation and manifest."""
+    names = [source.name for source in sources]
+    if len(names) != len(set(names)):
+        raise ValueError("backup sources must have unique database names")
     destination.mkdir(parents=True, exist_ok=False)
     entries: list[dict[str, object]] = []
     for source in sources:
@@ -34,27 +53,37 @@ def backup_databases(sources: tuple[Path, ...], destination: Path) -> Path:
         finally:
             target_connection.close()
             source_connection.close()
+        _fsync_path(target)
         entries.append(
             {"name": source.name, "sha256": file_sha256(target), "size": target.stat().st_size}
         )
+    created_at = datetime.now(UTC).isoformat()
+    generation_id = _canonical_hash({"created_at": created_at, "databases": entries})
+    manifest_body: dict[str, Any] = {
+        "schema_version": 2,
+        "generation_id": generation_id,
+        "created_at": created_at,
+        "databases": entries,
+    }
+    manifest_body["cross_store_manifest_hash"] = _canonical_hash(manifest_body)
     manifest = destination / "manifest.json"
     manifest.write_text(
-        json.dumps(
-            {"created_at": datetime.now(UTC).isoformat(), "databases": entries},
-            sort_keys=True,
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
+        json.dumps(manifest_body, sort_keys=True, indent=2) + "\n", encoding="utf-8"
     )
+    _fsync_path(manifest)
+    _fsync_path(destination)
     return manifest
 
 
-def restore_databases(manifest: Path, destination: Path, *, overwrite: bool = False) -> None:
-    """Verify every artifact before atomically restoring it."""
-    document = json.loads(manifest.read_text(encoding="utf-8"))
-    destination.mkdir(parents=True, exist_ok=True)
-    verified: list[tuple[Path, Path]] = []
+def _validated_manifest(manifest: Path) -> dict[str, Any]:
+    document: dict[str, Any] = json.loads(manifest.read_text(encoding="utf-8"))
+    expected = str(document.pop("cross_store_manifest_hash", ""))
+    if _canonical_hash(document) != expected:
+        raise RuntimeError("cross-store manifest hash mismatch")
+    document["cross_store_manifest_hash"] = expected
+    names = [str(entry["name"]) for entry in document["databases"]]
+    if len(names) != len(set(names)):
+        raise RuntimeError("backup manifest contains duplicate database names")
     for entry in document["databases"]:
         source = manifest.parent / str(entry["name"])
         if file_sha256(source) != entry["sha256"]:
@@ -65,11 +94,60 @@ def restore_databases(manifest: Path, destination: Path, *, overwrite: bool = Fa
                 raise RuntimeError(f"backup integrity check failed: {source.name}")
         finally:
             connection.close()
-        target = destination / source.name
-        if target.exists() and not overwrite:
-            raise FileExistsError(target)
-        verified.append((source, target))
-    for source, target in verified:
-        temporary = target.with_suffix(target.suffix + ".restore-tmp")
-        temporary.write_bytes(source.read_bytes())
-        os.replace(temporary, target)
+    return document
+
+
+def restore_databases(
+    manifest: Path,
+    destination: Path,
+    *,
+    overwrite: bool = False,
+    fail_after_files: int | None = None,
+) -> Path:
+    """Restore all stores into a generation, then atomically switch CURRENT."""
+    document = _validated_manifest(manifest)
+    destination.mkdir(parents=True, exist_ok=True)
+    generations = destination / "generations"
+    generations.mkdir(exist_ok=True)
+    generation_id = str(document["generation_id"])
+    final_generation = generations / generation_id
+    current = destination / "CURRENT"
+    if current.exists() and not overwrite:
+        raise FileExistsError(current)
+    if final_generation.exists():
+        if not overwrite:
+            raise FileExistsError(final_generation)
+        shutil.rmtree(final_generation)
+    temporary = generations / f".{generation_id}.restore-tmp"
+    if temporary.exists():
+        shutil.rmtree(temporary)
+    temporary.mkdir()
+    try:
+        for index, entry in enumerate(document["databases"], start=1):
+            source = manifest.parent / str(entry["name"])
+            target = temporary / source.name
+            shutil.copyfile(source, target)
+            _fsync_path(target)
+            if fail_after_files is not None and index >= fail_after_files:
+                raise RuntimeError("injected restore interruption")
+        copied_manifest = temporary / "manifest.json"
+        shutil.copyfile(manifest, copied_manifest)
+        _fsync_path(copied_manifest)
+        _fsync_path(temporary)
+        os.replace(temporary, final_generation)
+        _fsync_path(generations)
+        temporary_link = destination / ".CURRENT.restore-tmp"
+        temporary_link.unlink(missing_ok=True)
+        temporary_link.symlink_to(Path("generations") / generation_id)
+        os.replace(temporary_link, current)
+        _fsync_path(destination)
+        return final_generation
+    except BaseException:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        raise
+
+
+def current_generation(destination: Path) -> Path | None:
+    current = destination / "CURRENT"
+    return current.resolve(strict=True) if current.is_symlink() else None

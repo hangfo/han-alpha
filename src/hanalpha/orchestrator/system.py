@@ -158,6 +158,7 @@ class TradingSystem:
         events: list[OrderEvent] = []
         for position in snapshot.positions:
             quote = await self.provider.get_quote(position.symbol)
+            self._record_quote_snapshot(quote, observed_at=self.clock.now())
             events.extend(await self.broker.process_quote(quote))
         for event in events:
             self.ledger.record_order_event(event)
@@ -193,6 +194,7 @@ class TradingSystem:
         for symbol in self.config.universe:
             bars = await self.provider.get_bars(symbol, self.config.lookback_bars)
             quote = await self.provider.get_quote(symbol)
+            self._record_quote_snapshot(quote, observed_at=cycle_now)
             catalysts = await self.provider.get_catalysts(
                 symbol, cycle_now - timedelta(hours=self.config.agents.max_news_age_hours)
             )
@@ -474,6 +476,20 @@ class TradingSystem:
             },
             "account": (await self.broker.get_account_snapshot()).model_dump(mode="json"),
         }
+
+    def _record_quote_snapshot(self, quote: Quote, *, observed_at: datetime) -> None:
+        self.execution_store.record_quote_snapshot(
+            symbol=quote.symbol,
+            bid=Decimal(str(quote.bid)),
+            ask=Decimal(str(quote.ask)),
+            last=Decimal(str(quote.last)),
+            observed_at=ensure_aware_utc(observed_at),
+            provider_timestamp=ensure_aware_utc(quote.timestamp),
+            provider=type(self.provider).__name__,
+            feed_mode="SYNTHETIC" if self.config.mode == "synthetic" else "EXTERNAL",
+            market_phase="UNVERIFIED",
+            recorded_at=ensure_aware_utc(observed_at),
+        )
 
     async def cancel_all(self) -> list[OrderEvent]:
         events = await self.broker.cancel_all(self.runtime_access.broker_write)

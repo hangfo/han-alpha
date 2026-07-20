@@ -139,11 +139,10 @@ def execution_approve(
 def execution_arm(
     control: Annotated[Path, typer.Option("--control")],
     intent_id: Annotated[str, typer.Option("--intent-id")],
-    broker_snapshot_hash: Annotated[str, typer.Option("--broker-snapshot-hash")],
-    quote_hash: Annotated[str, typer.Option("--quote-hash")],
-    current_limit_price: Annotated[str, typer.Option("--current-limit-price")],
+    authority_id: Annotated[str, typer.Option("--authority-id")],
+    quote_snapshot_id: Annotated[str, typer.Option("--quote-snapshot-id")],
     max_drift_bps: Annotated[str, typer.Option("--max-drift-bps")] = "10",
-    ttl_seconds: Annotated[int, typer.Option("--ttl-seconds", min=1, max=300)] = 30,
+    ttl_seconds: Annotated[int, typer.Option("--ttl-seconds", min=1, max=5)] = 5,
 ) -> None:
     """Bind an approved intent to current broker and quote truth, then outbox it."""
     store = DurableExecutionStore(control)
@@ -151,9 +150,8 @@ def execution_arm(
         at = datetime.now(UTC)
         arm_id = store.arm_approved_intent(
             intent_id,
-            broker_snapshot_hash=broker_snapshot_hash,
-            quote_hash=quote_hash,
-            current_limit_price=Decimal(current_limit_price),
+            authority_id=authority_id,
+            quote_snapshot_id=quote_snapshot_id,
             max_drift_bps=Decimal(max_drift_bps),
             at=at,
             expires_at=at + timedelta(seconds=ttl_seconds),
@@ -191,16 +189,34 @@ def ibkr_observe(
         try:
             for index in range(snapshots):
                 certificate, model = await broker.observe_read_only(store, timeout=timeout)
-                snapshot = IBKRBrokerSnapshotAdapter.build(
-                    model,
-                    certificate,
-                    configured_account=secrets.ibkr_account,
-                    key_resolver=execution_store,
-                )
+                try:
+                    snapshot = IBKRBrokerSnapshotAdapter.build(
+                        model,
+                        certificate,
+                        configured_account=secrets.ibkr_account,
+                        key_resolver=execution_store,
+                    )
+                except ValueError:
+                    execution_store.open_freeze_ticket(
+                        "BROKER_SNAPSHOT_ADAPTER_REJECTED",
+                        source="ibkr_observer",
+                        at=datetime.now(UTC),
+                    )
+                    raise
                 report = Reconciler(execution_store).reconcile_authoritative(
                     snapshot,
                     at=datetime.now(UTC),
                     minimum_consensus_interval=timedelta(seconds=1),
+                )
+                execution_store.record_heartbeat(
+                    "broker-observer",
+                    status="OK" if certificate.complete else "ERROR",
+                    at=datetime.now(UTC),
+                    details={
+                        "certificate_id": certificate.certificate_id,
+                        "queue_depth": certificate.queue_depth,
+                        "writer_error": certificate.writer_error,
+                    },
                 )
                 console.print(
                     f"snapshot={index + 1}/{snapshots} "

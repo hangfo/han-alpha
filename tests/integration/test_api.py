@@ -19,11 +19,12 @@ def test_api_lifecycle_and_controls(monkeypatch, tmp_path: Path) -> None:
         assert health.json()["ok"]
         readiness = client.get("/ready")
         assert readiness.status_code == 200
-        assert set(readiness.json()["checks"]) == {
-            "broker_connected",
-            "market_data_healthy",
-            "control_reconciled",
+        assert set(readiness.json()["layers"]) == {
+            "service", "observer", "authority", "shadow", "paper_canary"
         }
+        assert client.get("/ready/service").status_code == 200
+        assert client.get("/ready/observer").status_code == 200
+        assert client.get("/ready/paper-canary").status_code == 200
         overview = client.get("/ops/overview")
         assert overview.status_code == 200
         assert overview.json()["source_notes"]["control"]
