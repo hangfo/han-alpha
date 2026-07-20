@@ -1,9 +1,11 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from hanalpha.domain.enums import Side
 from hanalpha.execution.control_store import DurableExecutionStore
-from hanalpha.execution.shadow import ShadowExecutionEvaluator
+from hanalpha.execution.shadow import ExecutionSlice, ShadowExecutionEvaluator
+
+NOW = datetime(2024, 1, 1, tzinfo=UTC)
 
 
 def test_shadow_execution_decomposes_cost_and_persists_reality_gap(tmp_path) -> None:
@@ -46,5 +48,46 @@ def test_shadow_missed_fill_is_explicit_not_zero_cost(tmp_path) -> None:
         )
         assert gap.missed_fill
         assert gap.total_implementation_shortfall is None
+    finally:
+        store.close()
+
+
+def test_shadow_schedule_measures_partial_fill_opportunity_and_protection(tmp_path) -> None:
+    store = DurableExecutionStore(tmp_path / "control.sqlite3")
+    try:
+        gap = ShadowExecutionEvaluator(store).evaluate_schedule(
+            decision_id="decision-schedule",
+            client_order_key="c" * 64,
+            side=Side.BUY,
+            quantity=10,
+            decision_price=Decimal("100"),
+            shadow_slices=(
+                ExecutionSlice(quantity=10, price=Decimal("100.10"), occurred_at=NOW),
+            ),
+            broker_slices=(
+                ExecutionSlice(
+                    quantity=3,
+                    price=Decimal("100.20"),
+                    commission=Decimal("0.50"),
+                    occurred_at=NOW + timedelta(milliseconds=200),
+                ),
+                ExecutionSlice(
+                    quantity=2,
+                    price=Decimal("100.40"),
+                    commission=Decimal("0.25"),
+                    occurred_at=NOW + timedelta(milliseconds=400),
+                ),
+            ),
+            terminal_mark=Decimal("101"),
+            submitted_at=NOW,
+            protection_ack_at=NOW + timedelta(milliseconds=650),
+            at=NOW + timedelta(seconds=1),
+        )
+        assert gap.broker_fill_price == Decimal("100.28")
+        assert gap.broker_filled_quantity == 5
+        assert gap.broker_unfilled_quantity == 5
+        assert gap.opportunity_cost == Decimal("5")
+        assert gap.protection_delay_ms == 650
+        assert gap.broker_fill_slices == 2
     finally:
         store.close()

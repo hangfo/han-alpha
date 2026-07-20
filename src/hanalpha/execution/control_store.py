@@ -58,10 +58,23 @@ class DurableExecutionStore:
               approval_id TEXT PRIMARY KEY, intent_id TEXT UNIQUE NOT NULL,
               actor_id TEXT NOT NULL, approved_at TEXT NOT NULL, approval_json TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS approval_arms (
+              arm_id TEXT PRIMARY KEY, intent_id TEXT UNIQUE NOT NULL,
+              broker_snapshot_hash TEXT NOT NULL, quote_hash TEXT NOT NULL,
+              approved_limit_price TEXT NOT NULL, max_drift_bps TEXT NOT NULL,
+              armed_at TEXT NOT NULL, expires_at TEXT NOT NULL, arm_json TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS outbox_commands (
               command_id TEXT PRIMARY KEY, intent_id TEXT UNIQUE NOT NULL,
               client_order_key TEXT UNIQUE NOT NULL, command_json TEXT NOT NULL,
               status TEXT NOT NULL, fencing_token INTEGER, claimed_at TEXT, delivered_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS cancel_commands (
+              command_id TEXT PRIMARY KEY, intent_id TEXT UNIQUE NOT NULL,
+              client_order_key TEXT UNIQUE NOT NULL, status TEXT NOT NULL,
+              fencing_token INTEGER, requested_by TEXT NOT NULL,
+              requested_at TEXT NOT NULL, claimed_at TEXT, delivered_at TEXT,
+              last_error TEXT
             );
             CREATE TABLE IF NOT EXISTS broker_event_inbox (
               broker_event_id TEXT PRIMARY KEY, client_order_key TEXT NOT NULL,
@@ -100,7 +113,25 @@ class DurableExecutionStore:
             CREATE TABLE IF NOT EXISTS broker_account_baseline (
               singleton INTEGER PRIMARY KEY CHECK(singleton=1), cash TEXT NOT NULL,
               buying_power TEXT, settled_cash TEXT, accrued_cash TEXT,
-              currency_balances_json TEXT NOT NULL, snapshot_as_of TEXT NOT NULL
+              currency_balances_json TEXT NOT NULL, snapshot_as_of TEXT NOT NULL,
+              projection_cash_delta TEXT NOT NULL DEFAULT '0',
+              projection_commissions TEXT NOT NULL DEFAULT '0', bridge_id TEXT
+            );
+            CREATE TABLE IF NOT EXISTS broker_snapshot_authority (
+              certificate_id TEXT PRIMARY KEY, semantic_hash TEXT NOT NULL,
+              visibility_scope_hash TEXT NOT NULL, snapshot_as_of TEXT NOT NULL,
+              snapshot_json TEXT NOT NULL, reconciliation_run_id TEXT,
+              reconciliation_status TEXT, recorded_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS broker_snapshot_consensus (
+              visibility_scope_hash TEXT PRIMARY KEY, semantic_hash TEXT NOT NULL,
+              consecutive_count INTEGER NOT NULL, first_seen_at TEXT NOT NULL,
+              last_seen_at TEXT NOT NULL, last_certificate_id TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS cash_bridge_events (
+              bridge_id TEXT PRIMARY KEY, event_type TEXT NOT NULL, amount TEXT NOT NULL,
+              currency TEXT NOT NULL, occurred_at TEXT NOT NULL, evidence_json TEXT NOT NULL,
+              baseline_epoch_started INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS reconciliation_runs (
               run_id TEXT PRIMARY KEY, started_at TEXT NOT NULL, completed_at TEXT,
@@ -123,6 +154,10 @@ class DurableExecutionStore:
               interval_id TEXT PRIMARY KEY, instrument_id TEXT NOT NULL,
               detected_at TEXT NOT NULL, unprotected_quantity INTEGER NOT NULL,
               duration_ms INTEGER NOT NULL, resolved_at TEXT, payload_json TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS ops_heartbeats (
+              component TEXT PRIMARY KEY, status TEXT NOT NULL,
+              observed_at TEXT NOT NULL, details_json TEXT NOT NULL
             );
             INSERT OR IGNORE INTO control_state VALUES (1, 1, 'startup_reconciliation_required',
               '1970-01-01T00:00:00+00:00');
@@ -149,6 +184,19 @@ class DurableExecutionStore:
                 DROP TABLE freeze_tickets_legacy;
                 """
             )
+        baseline_columns = {
+            row["name"]
+            for row in self.connection.execute("PRAGMA table_info(broker_account_baseline)")
+        }
+        for name, declaration in (
+            ("projection_cash_delta", "TEXT NOT NULL DEFAULT '0'"),
+            ("projection_commissions", "TEXT NOT NULL DEFAULT '0'"),
+            ("bridge_id", "TEXT"),
+        ):
+            if name not in baseline_columns:
+                self.connection.execute(
+                    f"ALTER TABLE broker_account_baseline ADD COLUMN {name} {declaration}"
+                )
         self.connection.commit()
         if not self.connection.execute(
             """SELECT 1 FROM freeze_tickets WHERE reason_code='STARTUP_RECONCILIATION'
@@ -160,6 +208,27 @@ class DurableExecutionStore:
 
     def close(self) -> None:
         self.connection.close()
+
+    def record_heartbeat(
+        self,
+        component: str,
+        *,
+        status: str,
+        at: datetime,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO ops_heartbeats VALUES (?, ?, ?, ?)
+                   ON CONFLICT(component) DO UPDATE SET status=excluded.status,
+                   observed_at=excluded.observed_at, details_json=excluded.details_json""",
+                (
+                    component,
+                    status,
+                    at.isoformat(),
+                    json.dumps(details or {}, sort_keys=True, separators=(",", ":")),
+                ),
+            )
 
     def stage(
         self,
@@ -321,14 +390,82 @@ class DurableExecutionStore:
                 "INSERT OR IGNORE INTO operator_approvals VALUES (?, ?, ?, ?, ?)",
                 (approval_id, intent_id, actor_id, at.isoformat(), serialized),
             )
-            intent = ExecutionIntent.model_validate_json(row["intent_json"])
             self.connection.execute(
                 "UPDATE execution_intents SET status=?, version=version+1 WHERE intent_id=?",
                 (ExecutionStatus.APPROVED.value, intent_id),
             )
-            self._enqueue(intent)
             self.connection.commit()
             return approval_id
+        except BaseException:
+            self.connection.rollback()
+            raise
+
+    def arm_approved_intent(
+        self,
+        intent_id: str,
+        *,
+        broker_snapshot_hash: str,
+        quote_hash: str,
+        current_limit_price: Decimal,
+        max_drift_bps: Decimal,
+        at: datetime,
+        expires_at: datetime,
+    ) -> str:
+        """Bind approval to fresh broker/quote truth before creating the submit outbox."""
+        try:
+            self.connection.execute("BEGIN IMMEDIATE")
+            blocking = self.active_freeze_reasons()
+            if blocking:
+                raise ExecutionInvariantError("arming is frozen: " + ",".join(blocking))
+            row = self._intent_row(intent_id)
+            if row["status"] not in {
+                ExecutionStatus.APPROVED.value,
+                ExecutionStatus.OUTBOXED.value,
+            }:
+                raise ExecutionInvariantError("intent is not approved")
+            if expires_at <= at:
+                raise ExecutionInvariantError("approval arm is already expired")
+            authority = self.latest_broker_snapshot_authority()
+            if authority is None or authority["semantic_hash"] != broker_snapshot_hash:
+                raise ExecutionInvariantError("broker snapshot authority is stale or unknown")
+            intent = ExecutionIntent.model_validate_json(row["intent_json"])
+            drift_bps = abs(current_limit_price - intent.limit_price) / intent.limit_price * 10_000
+            if drift_bps > max_drift_bps:
+                raise ExecutionInvariantError("quote drift exceeds approval arm limit")
+            document = {
+                "intent_id": intent_id,
+                "broker_snapshot_hash": broker_snapshot_hash,
+                "quote_hash": quote_hash,
+                "approved_limit_price": str(current_limit_price),
+                "max_drift_bps": str(max_drift_bps),
+                "armed_at": at.isoformat(),
+                "expires_at": expires_at.isoformat(),
+                "intent_spec_hash": canonical_hash(intent),
+            }
+            arm_id = canonical_hash(document)
+            serialized = json.dumps(document, sort_keys=True, separators=(",", ":"))
+            existing = self.connection.execute(
+                "SELECT arm_json FROM approval_arms WHERE intent_id=?", (intent_id,)
+            ).fetchone()
+            if existing is not None and existing["arm_json"] != serialized:
+                raise ExecutionInvariantError("intent already has a different approval arm")
+            self.connection.execute(
+                "INSERT OR IGNORE INTO approval_arms VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    arm_id,
+                    intent_id,
+                    broker_snapshot_hash,
+                    quote_hash,
+                    str(current_limit_price),
+                    str(max_drift_bps),
+                    at.isoformat(),
+                    expires_at.isoformat(),
+                    serialized,
+                ),
+            )
+            self._enqueue(intent)
+            self.connection.commit()
+            return arm_id
         except BaseException:
             self.connection.rollback()
             raise
@@ -415,6 +552,15 @@ class DurableExecutionStore:
                 self.connection.commit()
                 return None
             reservation = RiskReservation.model_validate_json(row["reservation_json"])
+            approval = self.connection.execute(
+                "SELECT 1 FROM operator_approvals WHERE intent_id=?", (row["intent_id"],)
+            ).fetchone()
+            if approval is not None:
+                arm = self.connection.execute(
+                    "SELECT expires_at FROM approval_arms WHERE intent_id=?", (row["intent_id"],)
+                ).fetchone()
+                if arm is None or datetime.fromisoformat(arm["expires_at"]) <= at:
+                    raise ExecutionInvariantError("approval arm missing or expired")
             if reservation.expires_at <= at:
                 self.connection.execute(
                     "UPDATE outbox_commands SET status='DELIVERED', delivered_at=? WHERE command_id=?",
@@ -473,6 +619,146 @@ class DurableExecutionStore:
         with self.connection:
             self.connection.execute(
                 "UPDATE outbox_commands SET status='DELIVERED', delivered_at=? WHERE command_id=?",
+                (at.isoformat(), command_id),
+            )
+
+    def request_cancel(self, intent_id: str, *, actor_id: str, at: datetime) -> str:
+        """Persist a risk-reducing cancel command; repeated requests are idempotent."""
+        try:
+            self.connection.execute("BEGIN IMMEDIATE")
+            row = self._intent_row(intent_id)
+            existing = self.connection.execute(
+                "SELECT command_id FROM cancel_commands WHERE intent_id=?", (intent_id,)
+            ).fetchone()
+            if existing is not None:
+                self.connection.commit()
+                return str(existing["command_id"])
+            terminal = {
+                ExecutionStatus.FILLED.value,
+                ExecutionStatus.CANCELLED.value,
+                ExecutionStatus.REJECTED.value,
+                ExecutionStatus.EXPIRED.value,
+            }
+            if row["status"] in terminal:
+                raise ExecutionInvariantError("terminal intent cannot be cancelled")
+            command_id = canonical_hash(
+                {"command_type": "CANCEL", "client_order_key": row["client_order_key"]}
+            )
+            local_only = row["status"] in {
+                ExecutionStatus.APPROVAL_PENDING.value,
+                ExecutionStatus.APPROVED.value,
+                ExecutionStatus.OUTBOXED.value,
+            }
+            self.connection.execute(
+                """INSERT INTO cancel_commands
+                   VALUES (?, ?, ?, ?, NULL, ?, ?, NULL, ?, NULL)""",
+                (
+                    command_id,
+                    intent_id,
+                    row["client_order_key"],
+                    "DELIVERED" if local_only else "PENDING",
+                    actor_id,
+                    at.isoformat(),
+                    at.isoformat() if local_only else None,
+                ),
+            )
+            if local_only:
+                self.connection.execute(
+                    """UPDATE outbox_commands SET status='DELIVERED', delivered_at=?
+                       WHERE intent_id=? AND status='PENDING'""",
+                    (at.isoformat(), intent_id),
+                )
+            self.connection.execute(
+                "UPDATE execution_intents SET status=?, version=version+1 WHERE intent_id=?",
+                (
+                    ExecutionStatus.CANCELLED.value
+                    if local_only
+                    else ExecutionStatus.CANCEL_REQUESTED.value,
+                    intent_id,
+                ),
+            )
+            if local_only:
+                self._update_reservation(
+                    row["reservation_id"],
+                    int(row["filled_quantity"]),
+                    ExecutionIntent.model_validate_json(row["intent_json"]).quantity,
+                    ExecutionStatus.CANCELLED,
+                    at,
+                )
+            self._append_order_event(
+                intent_id,
+                "CANCELLED_BEFORE_BROKER" if local_only else "CANCEL_REQUESTED",
+                at,
+                {"actor_id": actor_id, "command_id": command_id},
+            )
+            self.connection.commit()
+            return command_id
+        except BaseException:
+            self.connection.rollback()
+            raise
+
+    def claim_next_cancel(
+        self, lease: ExecutionLease, *, at: datetime
+    ) -> tuple[str, ExecutionIntent] | None:
+        """Claim cancel under the single-writer fence even while new risk is frozen."""
+        try:
+            self.connection.execute("BEGIN IMMEDIATE")
+            current = self.connection.execute(
+                "SELECT * FROM execution_leases WHERE lease_name=?", (lease.lease_name,)
+            ).fetchone()
+            if (
+                current is None
+                or current["owner_id"] != lease.owner_id
+                or int(current["fencing_token"]) != lease.fencing_token
+                or datetime.fromisoformat(current["expires_at"]) <= at
+            ):
+                raise ExecutionInvariantError("stale execution fencing token")
+            row = self.connection.execute(
+                """SELECT c.*, i.intent_json FROM cancel_commands c
+                   JOIN execution_intents i ON i.intent_id=c.intent_id
+                   WHERE c.status='PENDING' ORDER BY c.rowid LIMIT 1"""
+            ).fetchone()
+            if row is None:
+                self.connection.commit()
+                return None
+            updated = self.connection.execute(
+                """UPDATE cancel_commands SET status='CLAIMED', fencing_token=?, claimed_at=?
+                   WHERE command_id=? AND status='PENDING'""",
+                (lease.fencing_token, at.isoformat(), row["command_id"]),
+            )
+            if updated.rowcount != 1:
+                self.connection.rollback()
+                return None
+            self.connection.commit()
+            return row["command_id"], ExecutionIntent.model_validate_json(row["intent_json"])
+        except BaseException:
+            self.connection.rollback()
+            raise
+
+    def mark_cancel_unknown(self, command_id: str, *, at: datetime, reason: str) -> None:
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT intent_id FROM cancel_commands WHERE command_id=?", (command_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(command_id)
+            self.connection.execute(
+                """UPDATE cancel_commands SET status='UNKNOWN', delivered_at=?, last_error=?
+                   WHERE command_id=?""",
+                (at.isoformat(), reason, command_id),
+            )
+            self.connection.execute(
+                "UPDATE execution_intents SET status=?, version=version+1 WHERE intent_id=?",
+                (ExecutionStatus.CANCEL_UNKNOWN.value, row["intent_id"]),
+            )
+            self._append_order_event(
+                row["intent_id"], "CANCEL_UNKNOWN", at, {"reason": reason}
+            )
+
+    def mark_cancel_delivered(self, command_id: str, *, at: datetime) -> None:
+        with self.connection:
+            self.connection.execute(
+                "UPDATE cancel_commands SET status='DELIVERED', delivered_at=? WHERE command_id=?",
                 (at.isoformat(), command_id),
             )
 
@@ -656,6 +942,13 @@ class DurableExecutionStore:
     def intent(self, intent_id: str) -> sqlite3.Row:
         return self._intent_row(intent_id)
 
+    def resolve_client_order_prefix(self, prefix: str) -> str | None:
+        rows = self.connection.execute(
+            "SELECT client_order_key FROM execution_intents WHERE client_order_key LIKE ? LIMIT 2",
+            (f"{prefix}%",),
+        ).fetchall()
+        return str(rows[0]["client_order_key"]) if len(rows) == 1 else None
+
     def pending_approval_count(self) -> int:
         return int(
             self.connection.execute(
@@ -769,6 +1062,7 @@ class DurableExecutionStore:
                 ("RECONCILIATION_IN_PROGRESS", "reconciler"),
                 ("CRITICAL_RECONCILIATION_DISCREPANCY", "reconciler"),
                 ("INCOMPLETE_BROKER_SNAPSHOT", "reconciler"),
+                ("BROKER_SNAPSHOT_CONSENSUS_PENDING", "reconciler"),
             ):
                 self.resolve_freeze_ticket(
                     reason,
@@ -785,8 +1079,15 @@ class DurableExecutionStore:
 
     def set_account_baseline(self, snapshot: BrokerSnapshot) -> None:
         with self.connection:
+            projection = self.connection.execute(
+                "SELECT cash_delta, commissions FROM cash_projection WHERE singleton=1"
+            ).fetchone()
             self.connection.execute(
-                """INSERT INTO broker_account_baseline VALUES (1, ?, ?, ?, ?, ?, ?)
+                """INSERT INTO broker_account_baseline
+                   (singleton, cash, buying_power, settled_cash, accrued_cash,
+                    currency_balances_json, snapshot_as_of, projection_cash_delta,
+                    projection_commissions, bridge_id)
+                   VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                    ON CONFLICT(singleton) DO NOTHING""",
                 (
                     str(snapshot.cash),
@@ -798,19 +1099,209 @@ class DurableExecutionStore:
                         sort_keys=True,
                     ),
                     snapshot.as_of.isoformat(),
+                    projection["cash_delta"],
+                    projection["commissions"],
                 ),
             )
 
+    def advance_account_baseline_epoch(
+        self, snapshot: BrokerSnapshot, *, bridge_id: str, at: datetime
+    ) -> None:
+        """Accept a new cash epoch only after an explained bridge is durable."""
+        bridge = self.connection.execute(
+            "SELECT baseline_epoch_started FROM cash_bridge_events WHERE bridge_id=?",
+            (bridge_id,),
+        ).fetchone()
+        if bridge is None or not bool(bridge["baseline_epoch_started"]):
+            raise ExecutionInvariantError("cash baseline requires an explained bridge")
+        projection = self.connection.execute(
+            "SELECT cash_delta, commissions FROM cash_projection WHERE singleton=1"
+        ).fetchone()
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO broker_account_baseline
+                   (singleton, cash, buying_power, settled_cash, accrued_cash,
+                    currency_balances_json, snapshot_as_of, projection_cash_delta,
+                    projection_commissions, bridge_id)
+                   VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(singleton) DO UPDATE SET
+                     cash=excluded.cash, buying_power=excluded.buying_power,
+                     settled_cash=excluded.settled_cash, accrued_cash=excluded.accrued_cash,
+                     currency_balances_json=excluded.currency_balances_json,
+                     snapshot_as_of=excluded.snapshot_as_of,
+                     projection_cash_delta=excluded.projection_cash_delta,
+                     projection_commissions=excluded.projection_commissions,
+                     bridge_id=excluded.bridge_id""",
+                (
+                    str(snapshot.cash),
+                    str(snapshot.buying_power) if snapshot.buying_power is not None else None,
+                    str(snapshot.settled_cash) if snapshot.settled_cash is not None else None,
+                    str(snapshot.accrued_cash) if snapshot.accrued_cash is not None else None,
+                    json.dumps(
+                        {key: str(value) for key, value in snapshot.currency_balances.items()},
+                        sort_keys=True,
+                    ),
+                    snapshot.as_of.isoformat(),
+                    projection["cash_delta"],
+                    projection["commissions"],
+                    bridge_id,
+                ),
+            )
+            self._append_order_event(
+                bridge_id,
+                "CASH_BASELINE_EPOCH_ADVANCED",
+                at,
+                {"snapshot_as_of": snapshot.as_of.isoformat(), "bridge_id": bridge_id},
+            )
+
+    def register_snapshot_consensus(
+        self,
+        snapshot: BrokerSnapshot,
+        *,
+        at: datetime,
+        minimum_interval: timedelta = timedelta(seconds=1),
+    ) -> tuple[bool, int]:
+        if not (
+            snapshot.complete
+            and snapshot.semantic_hash
+            and snapshot.visibility_scope_hash
+            and snapshot.completeness_certificate_id
+        ):
+            return False, 0
+        try:
+            self.connection.execute("BEGIN IMMEDIATE")
+            row = self.connection.execute(
+                "SELECT * FROM broker_snapshot_consensus WHERE visibility_scope_hash=?",
+                (snapshot.visibility_scope_hash,),
+            ).fetchone()
+            count = 1
+            first_seen = at
+            if row is not None and row["semantic_hash"] == snapshot.semantic_hash:
+                last_seen = datetime.fromisoformat(row["last_seen_at"])
+                if at - last_seen >= minimum_interval:
+                    count = int(row["consecutive_count"]) + 1
+                    first_seen = datetime.fromisoformat(row["first_seen_at"])
+                else:
+                    count = int(row["consecutive_count"])
+                    first_seen = datetime.fromisoformat(row["first_seen_at"])
+            self.connection.execute(
+                """INSERT INTO broker_snapshot_consensus VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(visibility_scope_hash) DO UPDATE SET
+                     semantic_hash=excluded.semantic_hash,
+                     consecutive_count=excluded.consecutive_count,
+                     first_seen_at=excluded.first_seen_at,
+                     last_seen_at=excluded.last_seen_at,
+                     last_certificate_id=excluded.last_certificate_id""",
+                (
+                    snapshot.visibility_scope_hash,
+                    snapshot.semantic_hash,
+                    count,
+                    first_seen.isoformat(),
+                    at.isoformat(),
+                    snapshot.completeness_certificate_id,
+                ),
+            )
+            self.connection.commit()
+            return count >= 2, count
+        except BaseException:
+            self.connection.rollback()
+            raise
+
+    def record_broker_snapshot_authority(
+        self,
+        snapshot: BrokerSnapshot,
+        *,
+        reconciliation_run_id: str,
+        reconciliation_status: str,
+        at: datetime,
+    ) -> None:
+        if not (
+            snapshot.completeness_certificate_id
+            and snapshot.semantic_hash
+            and snapshot.visibility_scope_hash
+        ):
+            raise ExecutionInvariantError("broker snapshot authority metadata is incomplete")
+        with self.connection:
+            self.connection.execute(
+                "INSERT OR REPLACE INTO broker_snapshot_authority VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    snapshot.completeness_certificate_id,
+                    snapshot.semantic_hash,
+                    snapshot.visibility_scope_hash,
+                    snapshot.as_of.isoformat(),
+                    snapshot.model_dump_json(),
+                    reconciliation_run_id,
+                    reconciliation_status,
+                    at.isoformat(),
+                ),
+            )
+
+    def latest_broker_snapshot_authority(self) -> sqlite3.Row | None:
+        row = self.connection.execute(
+            "SELECT * FROM broker_snapshot_authority ORDER BY snapshot_as_of DESC LIMIT 1"
+        ).fetchone()
+        assert row is None or isinstance(row, sqlite3.Row)
+        return row
+
+    def record_cash_bridge(
+        self,
+        *,
+        event_type: str,
+        amount: Decimal,
+        currency: str,
+        at: datetime,
+        evidence: dict[str, object],
+        explained: bool,
+    ) -> str:
+        allowed = {
+            "BROKER_INTEREST",
+            "DIVIDEND",
+            "DEPOSIT",
+            "WITHDRAWAL",
+            "MANUAL_TRADE",
+            "FX_TRANSLATION",
+            "BROKER_ADJUSTMENT",
+        }
+        normalized_type = event_type if event_type in allowed else "UNKNOWN_EXTERNAL_CASH_EVENT"
+        document = {
+            "event_type": normalized_type,
+            "amount": str(amount),
+            "currency": currency,
+            "occurred_at": at.isoformat(),
+            "evidence": evidence,
+        }
+        bridge_id = canonical_hash(document)
+        with self.connection:
+            self.connection.execute(
+                "INSERT OR IGNORE INTO cash_bridge_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    bridge_id,
+                    normalized_type,
+                    str(amount),
+                    currency,
+                    at.isoformat(),
+                    json.dumps(evidence, sort_keys=True, separators=(",", ":")),
+                    bool(explained and normalized_type in allowed),
+                ),
+            )
+        if not explained or normalized_type == "UNKNOWN_EXTERNAL_CASH_EVENT":
+            self.open_freeze_ticket("UNEXPLAINED_CASH_BRIDGE", source="cash_bridge", at=at)
+        return bridge_id
+
     def expected_account_cash(self) -> Decimal | None:
         baseline = self.connection.execute(
-            "SELECT cash FROM broker_account_baseline WHERE singleton=1"
+            "SELECT cash, projection_cash_delta FROM broker_account_baseline WHERE singleton=1"
         ).fetchone()
         if baseline is None:
             return None
         projection = self.connection.execute(
             "SELECT cash_delta FROM cash_projection WHERE singleton=1"
         ).fetchone()
-        return Decimal(baseline["cash"]) + Decimal(projection["cash_delta"])
+        return (
+            Decimal(baseline["cash"])
+            + Decimal(projection["cash_delta"])
+            - Decimal(baseline["projection_cash_delta"])
+        )
 
     def expected_account_fields(self) -> dict[str, Decimal | None] | None:
         baseline = self.connection.execute(
@@ -819,21 +1310,15 @@ class DurableExecutionStore:
         if baseline is None:
             return None
         projection = self.connection.execute(
-            "SELECT cash_delta, commissions FROM cash_projection WHERE singleton=1"
+            "SELECT cash_delta FROM cash_projection WHERE singleton=1"
         ).fetchone()
-        cash_delta = Decimal(projection["cash_delta"])
+        cash_delta = Decimal(projection["cash_delta"]) - Decimal(
+            baseline["projection_cash_delta"]
+        )
         return {
             "cash": Decimal(baseline["cash"]) + cash_delta,
-            "settled_cash": (
-                Decimal(baseline["settled_cash"]) + cash_delta
-                if baseline["settled_cash"] is not None
-                else None
-            ),
-            "buying_power": (
-                Decimal(baseline["buying_power"]) + cash_delta
-                if baseline["buying_power"] is not None
-                else None
-            ),
+            "settled_cash": None,
+            "buying_power": None,
             "accrued_cash": (
                 Decimal(baseline["accrued_cash"])
                 if baseline["accrued_cash"] is not None

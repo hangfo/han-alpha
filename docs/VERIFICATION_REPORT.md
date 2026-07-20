@@ -1,5 +1,19 @@
 # Verification report
 
+## M6 audit hardening and M7-A read-only operations - 2026-07-20
+
+VERIFIED locally: callback Queue single-writer and clean drain, transport-only Observer startup, semantic request barriers and visibility scope, native IBKR identity/reducer, M5 BrokerSnapshot adapter, two-snapshot consensus, Cash Bridge baseline epochs, two-stage approve/arm, fenced durable cancel, schedule-aware reality gaps, liveness/readiness, Ops metrics/dashboard unit tests, and hash/integrity checked backup-restore drill.
+
+BLOCKED externally: official IBKR TWS API installation in the active environment, authenticated Paper account proof, real callback/reset Golden Tape, durable real cancel and Bracket behavior, first Paper Manual Canary, 20-day Shadow plus 20-day controlled Paper evidence, deployed alerting and production restore drill.
+
+NOT IMPLEMENTED: unattended Paper/Live trading, M7 destructive-action UI, browser session/CSRF/double confirmation, deployed Playwright, or any claim of proven profitability.
+
+Detailed review decisions: `docs/v2-plan/14_M6_REVIEW_AND_M7_DECISIONS_ZH.md`.
+
+Canonical local verification: `preflight: OK`; Ruff and strict mypy PASS; 184 Python tests PASS at 85.11% branch coverage; package build and CLI/API smoke PASS; 2 Vitest component tests PASS; TypeScript strict/lint and Vite production build PASS; `npm audit --audit-level=high` reports 0 vulnerabilities.
+
+Browser QA: local Vite dashboard against the real local FastAPI `/ops/overview` rendered the safety, Observer, reconciliation, execution-empty and evidence states correctly; browser console warning/error list was empty. No destructive control was present.
+
 ## M5 review hardening and M6 read-only kernel - 2026-07-19
 
 Implemented and verified locally without Provider, vendor or Broker writes:

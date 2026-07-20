@@ -3,12 +3,16 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from decimal import Decimal
+from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from hanalpha.config import load_config
+from hanalpha.ops import OpsService
 from hanalpha.orchestrator import TradingSystem, build_system
 from hanalpha.portfolio import Ledger
 
@@ -21,9 +25,22 @@ class ApprovalRequest(BaseModel):
     actor_id: str = Field(min_length=3, max_length=200)
 
 
+class ApprovalArmRequest(BaseModel):
+    broker_snapshot_hash: str = Field(min_length=64, max_length=64)
+    quote_hash: str = Field(min_length=64, max_length=64)
+    current_limit_price: Decimal = Field(gt=0)
+    max_drift_bps: Decimal = Field(gt=0, le=100)
+    expires_at: datetime
+
+
+class CancelIntentRequest(BaseModel):
+    actor_id: str = Field(min_length=3, max_length=200)
+
+
 class AppState:
     system: TradingSystem | None = None
     ledger: Ledger | None = None
+    observer_path: Path | None = None
 
 
 state = AppState()
@@ -36,6 +53,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     system = await build_system(config, secrets, ledger)
     state.system = system
     state.ledger = ledger
+    state.observer_path = Path(secrets.hanalpha_ibkr_observer_path)
     yield
     system.close()
     ledger.close()
@@ -55,6 +73,10 @@ def get_system() -> TradingSystem:
     return state.system
 
 
+def get_ops() -> OpsService:
+    return OpsService(get_system().execution_store, observer_path=state.observer_path)
+
+
 def require_operator_access(
     token: Annotated[str | None, Header(alias="X-Hanalpha-Operator-Token")] = None,
 ) -> None:
@@ -72,10 +94,23 @@ def require_broker_write_access(
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
+    return {"ok": True, "service": "hanalpha-api", "as_of": datetime.now(UTC)}
+
+
+@app.get("/ready")
+async def ready() -> dict[str, Any]:
     system = get_system()
-    status = await system.status()
-    healthy = status["broker_connected"] and status["market_data_healthy"]
-    return {"ok": healthy, "status": status}
+    return get_ops().readiness(await system.status())
+
+
+@app.get("/ops/overview")
+async def ops_overview() -> dict[str, Any]:
+    return get_ops().overview()
+
+
+@app.get("/metrics")
+async def metrics() -> Response:
+    return Response(get_ops().prometheus(), media_type="text/plain; version=0.0.4")
 
 
 @app.get("/status")
@@ -164,6 +199,42 @@ async def approve_intent(
     return {"intent_id": intent_id, "approval_id": approval_id, "status": "APPROVED"}
 
 
+@app.post("/execution/approvals/{intent_id}/arm")
+async def arm_intent(
+    intent_id: str,
+    request: ApprovalArmRequest,
+    _: Annotated[None, Depends(require_operator_access)],
+) -> dict[str, str]:
+    try:
+        arm_id = get_system().execution_store.arm_approved_intent(
+            intent_id,
+            broker_snapshot_hash=request.broker_snapshot_hash,
+            quote_hash=request.quote_hash,
+            current_limit_price=request.current_limit_price,
+            max_drift_bps=request.max_drift_bps,
+            at=datetime.now(UTC),
+            expires_at=request.expires_at,
+        )
+    except (KeyError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"intent_id": intent_id, "arm_id": arm_id, "status": "ARMED"}
+
+
+@app.post("/execution/intents/{intent_id}/cancel")
+async def cancel_intent(
+    intent_id: str,
+    request: CancelIntentRequest,
+    _: Annotated[None, Depends(require_operator_access)],
+) -> dict[str, str]:
+    try:
+        command_id = get_system().execution_store.request_cancel(
+            intent_id, actor_id=request.actor_id, at=datetime.now(UTC)
+        )
+    except (KeyError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"intent_id": intent_id, "command_id": command_id, "status": "CANCEL_REQUESTED"}
+
+
 @app.post("/orders/cancel-all")
 async def cancel_all(_: Annotated[None, Depends(require_broker_write_access)]) -> dict[str, Any]:
     system = get_system()
@@ -183,3 +254,8 @@ async def flatten_all(_: Annotated[None, Depends(require_broker_write_access)]) 
     }
     result = await system.flatten_all(quotes)
     return {"events": [event.model_dump(mode="json") for event in result]}
+
+
+dashboard_dist = Path(__file__).parents[3] / "web" / "dist"
+if dashboard_dist.is_dir():
+    app.mount("/", StaticFiles(directory=dashboard_dist, html=True), name="dashboard")

@@ -13,7 +13,9 @@ hanalpha demo --cycles 3
 hanalpha backtest --symbol NVDA --bars 400
 
 if test -f web/package.json; then
-  (cd web && npm ci && npm run lint && npm run typecheck && npm test -- --run && npm run build)
+  (cd web && NPM_CONFIG_CACHE="${TMPDIR:-/tmp}/han-alpha-npm-cache" npm ci \
+    && NPM_CONFIG_CACHE="${TMPDIR:-/tmp}/han-alpha-npm-cache" npm audit --audit-level=high \
+    && npm run lint && npm run typecheck && npm test -- --run && npm run build)
 fi
 
 printf 'verify_all: OK\n'

@@ -21,6 +21,7 @@ from hanalpha.execution.control_store import DurableExecutionStore
 from hanalpha.execution.fake_broker import DurableFakeBroker
 from hanalpha.execution.ibkr import IBKRBroker
 from hanalpha.execution.ibkr_observer import IBKRFactStore
+from hanalpha.execution.ibkr_snapshot import IBKRBrokerSnapshotAdapter
 from hanalpha.execution.reconciliation import Reconciler
 from hanalpha.execution.worker import ExecutionWorker
 from hanalpha.experiments.models import ExperimentManifest, WindowRole
@@ -128,23 +129,57 @@ def execution_approve(
         if report.status not in {"CONVERGED", "DEGRADED"}:
             raise typer.BadParameter(f"reconciliation blocked approval: {report.status}")
         approval_id = store.approve(intent_id, actor_id=actor, at=datetime.now(UTC))
-        console.print(f"approval_id={approval_id} status=APPROVED")
+        console.print(f"approval_id={approval_id} status=APPROVED_UNARMED")
     finally:
         broker.close()
+        store.close()
+
+
+@app.command("execution-arm")
+def execution_arm(
+    control: Annotated[Path, typer.Option("--control")],
+    intent_id: Annotated[str, typer.Option("--intent-id")],
+    broker_snapshot_hash: Annotated[str, typer.Option("--broker-snapshot-hash")],
+    quote_hash: Annotated[str, typer.Option("--quote-hash")],
+    current_limit_price: Annotated[str, typer.Option("--current-limit-price")],
+    max_drift_bps: Annotated[str, typer.Option("--max-drift-bps")] = "10",
+    ttl_seconds: Annotated[int, typer.Option("--ttl-seconds", min=1, max=300)] = 30,
+) -> None:
+    """Bind an approved intent to current broker and quote truth, then outbox it."""
+    store = DurableExecutionStore(control)
+    try:
+        at = datetime.now(UTC)
+        arm_id = store.arm_approved_intent(
+            intent_id,
+            broker_snapshot_hash=broker_snapshot_hash,
+            quote_hash=quote_hash,
+            current_limit_price=Decimal(current_limit_price),
+            max_drift_bps=Decimal(max_drift_bps),
+            at=at,
+            expires_at=at + timedelta(seconds=ttl_seconds),
+        )
+        console.print(f"arm_id={arm_id} status=ARMED")
+    finally:
         store.close()
 
 
 @app.command("ibkr-observe")
 def ibkr_observe(
     state_path: Annotated[Path, typer.Option("--state")],
+    control: Annotated[Path, typer.Option("--control")],
+    snapshots: Annotated[int, typer.Option("--snapshots", min=1, max=20)] = 2,
     timeout: Annotated[float, typer.Option("--timeout", min=1, max=120)] = 15,
 ) -> None:
     """Capture a read-only IBKR Paper fact tape and completeness certificate."""
 
     async def _run() -> None:
         _, secrets = load_config()
+        if secrets.hanalpha_env.lower() != "paper":
+            raise typer.BadParameter("IBKR observer requires HANALPHA_ENV=paper")
         if secrets.ibkr_port not in {4002, 7497}:
             raise typer.BadParameter("IBKR observer only permits Paper ports 4002 or 7497")
+        if not secrets.ibkr_account:
+            raise typer.BadParameter("IBKR_ACCOUNT must explicitly identify the Paper account")
         broker = IBKRBroker(
             host=secrets.ibkr_host,
             port=secrets.ibkr_port,
@@ -152,19 +187,36 @@ def ibkr_observe(
             account=secrets.ibkr_account,
         )
         store = IBKRFactStore(state_path)
+        execution_store = DurableExecutionStore(control)
         try:
-            await broker.connect(timeout=timeout)
-            certificate, model = await broker.observe_read_only(store, timeout=timeout)
-            console.print(
-                f"complete={str(certificate.complete).lower()} "
-                f"certificate_id={certificate.certificate_id} "
-                f"orders={len(model.orders)} executions={len(model.executions)} "
-                f"positions={len(model.positions)}"
-            )
+            for index in range(snapshots):
+                certificate, model = await broker.observe_read_only(store, timeout=timeout)
+                snapshot = IBKRBrokerSnapshotAdapter.build(
+                    model,
+                    certificate,
+                    configured_account=secrets.ibkr_account,
+                    key_resolver=execution_store,
+                )
+                report = Reconciler(execution_store).reconcile_authoritative(
+                    snapshot,
+                    at=datetime.now(UTC),
+                    minimum_consensus_interval=timedelta(seconds=1),
+                )
+                console.print(
+                    f"snapshot={index + 1}/{snapshots} "
+                    f"complete={str(certificate.complete).lower()} "
+                    f"reconciliation={report.status} "
+                    f"certificate_id={certificate.certificate_id} "
+                    f"orders={len(model.orders)} executions={len(model.executions)} "
+                    f"positions={len(model.positions)}"
+                )
+                if index + 1 < snapshots:
+                    await asyncio.sleep(1)
         finally:
             if hasattr(broker.app, "disconnect"):
                 broker.app.disconnect()
             store.close()
+            execution_store.close()
 
     asyncio.run(_run())
 

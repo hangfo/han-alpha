@@ -25,6 +25,7 @@ class FakeScenario(StrEnum):
     REJECT = "reject"
     PARTIAL_FILL = "partial_fill"
     MISSING_PROTECTION = "missing_protection"
+    CANCEL_DROP_RESPONSE = "cancel_drop_response"
 
 
 class BrokerSubmissionUnknown(RuntimeError):
@@ -191,6 +192,7 @@ class DurableFakeBroker:
             if row is None:
                 raise KeyError(client_order_key)
             intent = ExecutionIntent.model_validate_json(row["intent_json"])
+            scenario = self._next_scenario()
             events: list[BrokerEvent] = []
             if fill_before_cancel_quantity > 0 and int(row["filled_quantity"]) < intent.quantity:
                 events.append(
@@ -215,6 +217,9 @@ class DurableFakeBroker:
                     "UPDATE broker_orders SET status='CANCELLED' WHERE client_order_key=?",
                     (client_order_key,),
                 )
+            if scenario == FakeScenario.CANCEL_DROP_RESPONSE:
+                self.connection.commit()
+                raise BrokerSubmissionUnknown("cancel accepted but response was dropped")
             self.connection.commit()
             return tuple(events)
         except BaseException:

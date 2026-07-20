@@ -26,8 +26,8 @@ Status values: `DONE` means implemented with local evidence; `PARTIAL` means use
 | Preregistered strategy evidence | DONE M3 LOCAL | Interpretable baselines, persistent protocol/trial authority, moving-block bootstrap, interval purge, DSR/PBO, executed counterfactuals and signed derived promotion; real Alpha is not established |
 | LLM Evidence Service | DONE M4 LOCAL | PIT documents, exact citations, expiry/conflicts, abstention, cache, persistent budgets/attempts, no-trade review firewall and ablation accounting; real Provider and PIT value are BLOCKED |
 | Durable execution control plane | DONE M5 LOCAL | Frozen capsule, combined account reservation, approval API/CLI receipt, outbox/inbox, durable freeze tickets, early fence publication, exact cash, per-parent Protection Graph, strict Unknown escrow, persistent Fake Broker and reconciliation |
-| IBKR Paper validation | PARTIAL M6 LOCAL | Zero-write observer, session epochs, raw fact tape, completeness certificate, native-identity reducer and shadow gap are local-test verified; official `ibapi`, real Paper callbacks, burn-in, durable cancel and any Paper order remain BLOCKED |
-| Ops Dashboard | PLANNED M7 | Read-only first, authenticated controls, CSRF, actor audit, double confirm |
+| IBKR Paper validation | PARTIAL M6 LOCAL | Queue single-writer observer, semantic barriers/certificate, visibility scope, M5 snapshot adapter, consensus, durable cancel and schedule-aware shadow are local-test verified; official `ibapi`, real Paper callbacks/burn-in/cancel/bracket and every Paper order remain BLOCKED |
+| Ops Dashboard | PARTIAL M7 LOCAL | Read-only source-backed API/metrics/React dashboard and backup/restore complete; browser session, CSRF, actor audit, double confirm, deployed E2E and write controls are BLOCKED/NOT IMPLEMENTED |
 | Live Proposal review | PLANNED M8 | Proposal-only; independent security/legal/operational approval |
 | Proven post-cost alpha | NOT ESTABLISHED | Cannot be assessed before M1–M3 gates and forward observation |
 

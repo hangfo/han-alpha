@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 
@@ -40,6 +40,73 @@ class ReconciliationReport(BaseModel):
 class Reconciler:
     def __init__(self, store: DurableExecutionStore) -> None:
         self.store = store
+
+    def reconcile_authoritative(
+        self,
+        snapshot: BrokerSnapshot,
+        *,
+        at: datetime,
+        minimum_consensus_interval: timedelta = timedelta(seconds=1),
+    ) -> ReconciliationReport:
+        if not snapshot.complete:
+            return self.reconcile(snapshot, at=at)
+        consensus, count = self.store.register_snapshot_consensus(
+            snapshot, at=at, minimum_interval=minimum_consensus_interval
+        )
+        if not consensus:
+            self.store.open_freeze_ticket(
+                "BROKER_SNAPSHOT_CONSENSUS_PENDING", source="reconciler", at=at
+            )
+            run_id = canonical_hash(
+                {
+                    "semantic_hash": snapshot.semantic_hash,
+                    "visibility_scope_hash": snapshot.visibility_scope_hash,
+                    "consensus_count": count,
+                    "at": at,
+                }
+            )
+            discrepancy = self._discrepancy(
+                DiscrepancySeverity.WARNING,
+                "BROKER_SNAPSHOT_CONSENSUS_PENDING",
+                snapshot.visibility_scope_hash or "missing-scope",
+                {"consecutive_count": count, "required": 2},
+            )
+            with self.store.connection:
+                self.store.connection.execute(
+                    "INSERT OR IGNORE INTO reconciliation_runs VALUES (?, ?, ?, ?, ?)",
+                    (
+                        run_id,
+                        at.isoformat(),
+                        at.isoformat(),
+                        "AWAITING_CONSENSUS",
+                        json.dumps({"consecutive_count": count, "required": 2}),
+                    ),
+                )
+                self.store.connection.execute(
+                    "INSERT OR IGNORE INTO reconciliation_discrepancies VALUES (?, ?, ?, ?, ?, ?, NULL)",
+                    (
+                        discrepancy.discrepancy_id,
+                        run_id,
+                        discrepancy.severity.value,
+                        discrepancy.kind,
+                        discrepancy.entity_key,
+                        json.dumps(discrepancy.details, sort_keys=True),
+                    ),
+                )
+            return ReconciliationReport(
+                run_id=run_id,
+                status="AWAITING_CONSENSUS",
+                discrepancies=(discrepancy,),
+                frozen=True,
+            )
+        report = self.reconcile(snapshot, at=at)
+        self.store.record_broker_snapshot_authority(
+            snapshot,
+            reconciliation_run_id=report.run_id,
+            reconciliation_status=report.status,
+            at=at,
+        )
+        return report
 
     def reconcile(self, snapshot: BrokerSnapshot, *, at: datetime) -> ReconciliationReport:
         run_id = canonical_hash({"as_of": snapshot.as_of, "started_at": at})

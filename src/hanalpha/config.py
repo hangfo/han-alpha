@@ -130,6 +130,7 @@ class SecretSettings(BaseSettings):
     hanalpha_env: str = "paper"
     hanalpha_config_path: str = "configs/paper.yaml"
     hanalpha_ledger_path: str = ".state/ledger.sqlite3"
+    hanalpha_ibkr_observer_path: str = ".state/ibkr-observer.sqlite3"
     polygon_api_key: str | None = None
     fred_api_key: str | None = None
     sec_user_agent: str | None = None

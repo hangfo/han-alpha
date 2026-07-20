@@ -17,6 +17,19 @@ def test_api_lifecycle_and_controls(monkeypatch, tmp_path: Path) -> None:
         health = client.get("/health")
         assert health.status_code == 200
         assert health.json()["ok"]
+        readiness = client.get("/ready")
+        assert readiness.status_code == 200
+        assert set(readiness.json()["checks"]) == {
+            "broker_connected",
+            "market_data_healthy",
+            "control_reconciled",
+        }
+        overview = client.get("/ops/overview")
+        assert overview.status_code == 200
+        assert overview.json()["source_notes"]["control"]
+        metrics = client.get("/metrics")
+        assert metrics.status_code == 200
+        assert "hanalpha_control_frozen" in metrics.text
         cycle = client.post("/cycles/run")
         assert cycle.status_code == 403
         frozen = client.post("/risk/freeze", json={"reason": "operator test"})

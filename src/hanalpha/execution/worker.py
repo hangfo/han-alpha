@@ -34,3 +34,21 @@ class ExecutionWorker:
             self.store.ingest_broker_event(event)
         self.store.mark_delivered(command.command_id, at=at)
         return True
+
+    def dispatch_cancel_once(self, *, at: datetime) -> bool:
+        claimed = self.store.claim_next_cancel(self.lease, at=at)
+        if claimed is None:
+            return False
+        command_id, intent = claimed
+        try:
+            self.store.validate_lease(self.lease, at=at)
+            events = self.broker.cancel(
+                intent.client_order_key, fencing_token=self.lease.fencing_token, at=at
+            )
+        except BrokerSubmissionUnknown as exc:
+            self.store.mark_cancel_unknown(command_id, at=at, reason=str(exc))
+            return True
+        for event in events:
+            self.store.ingest_broker_event(event)
+        self.store.mark_cancel_delivered(command_id, at=at)
+        return True

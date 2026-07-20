@@ -3,20 +3,24 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from hanalpha.domain.enums import OrderStatus, Side
 from hanalpha.domain.models import AccountSnapshot, OrderEvent, OrderRequest, Position, Quote
 from hanalpha.execution.ibkr_observer import (
     IBKRCallbackCollector,
+    IBKRFactBridge,
     IBKRFactReducer,
     IBKRFactStore,
     IBKRFactType,
     IBKRReadModel,
+    ObserverRequestBarrier,
     SnapshotCompletenessCertificate,
+    account_hash,
 )
 from hanalpha.runtime.capabilities import BrokerWriteCapability, require_broker_write
+from hanalpha.simulation.events import canonical_hash
 
 try:
     from ibapi.client import EClient
@@ -145,9 +149,19 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
                     "order_id": int(execution.orderId),
                     "perm_id": int(getattr(execution, "permId", 0)),
                     "client_id": int(getattr(execution, "clientId", 0)),
+                    "account_hash": account_hash(str(getattr(execution, "acctNumber", ""))),
+                    "order_ref": str(getattr(execution, "orderRef", "")),
                     "symbol": str(contract.symbol),
+                    "con_id": int(getattr(contract, "conId", 0)),
+                    "exchange": str(getattr(execution, "exchange", "")),
                     "shares": str(execution.shares),
                     "price": str(execution.price),
+                    "cum_quantity": str(getattr(execution, "cumQty", execution.shares)),
+                    "average_price": str(getattr(execution, "avgPrice", execution.price)),
+                    "liquidation": int(getattr(execution, "liquidation", 0)),
+                    "pending_price_revision": bool(
+                        getattr(execution, "pendingPriceRevision", False)
+                    ),
                     "side": str(getattr(execution, "side", "")),
                     "time": str(getattr(execution, "time", "")),
                 },
@@ -170,13 +184,14 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
         self._observe(
             IBKRFactType.POSITION,
             {
-                "account": account,
+                "account_hash": account_hash(account),
                 "con_id": int(getattr(contract, "conId", 0)),
                 "symbol": str(contract.symbol),
+                "currency": str(getattr(contract, "currency", "")),
                 "position": str(position),
                 "average_cost": str(avgCost),
             },
-            key=f"{account}:{getattr(contract, 'conId', 0)}:{contract.symbol}",
+            key=f"{account_hash(account)}:{getattr(contract, 'conId', 0)}:{contract.symbol}",
         )
         quantity = int(position)
         if quantity == 0:
@@ -192,8 +207,14 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
     def accountSummary(self, reqId: int, account: str, tag: str, value: str, currency: str) -> None:
         self._observe(
             IBKRFactType.ACCOUNT_VALUE,
-            {"request_id": reqId, "account": account, "tag": tag, "value": value, "currency": currency},
-            key=f"{account}:{tag}:{currency}",
+            {
+                "request_id": reqId,
+                "account_hash": account_hash(account),
+                "tag": tag,
+                "value": value,
+                "currency": currency,
+            },
+            key=f"{reqId}:{account_hash(account)}:{tag}:{currency}",
         )
         try:
             self.account_values[tag] = float(value)
@@ -210,7 +231,10 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
         accounts = [item for item in accountsList.split(",") if item]
         self._observe(
             IBKRFactType.MANAGED_ACCOUNTS,
-            {"account_count": len(accounts)},
+            {
+                "account_count": len(accounts),
+                "account_hashes": [account_hash(account) for account in accounts],
+            },
             key=canonical_account_count(accounts),
         )
 
@@ -218,27 +242,42 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
         self._observe(IBKRFactType.ACCOUNT_END, {"request_id": reqId}, key=str(reqId))
 
     def openOrder(self, orderId: int, contract: Contract, order: Order, orderState: Any) -> None:
+        payload = {
+            "order_id": orderId,
+            "perm_id": int(getattr(order, "permId", 0)),
+            "parent_id": int(getattr(order, "parentId", 0)),
+            "client_id": int(getattr(order, "clientId", 0)),
+            "order_ref": str(getattr(order, "orderRef", "")),
+            "symbol": str(contract.symbol),
+            "con_id": int(getattr(contract, "conId", 0)),
+            "security_type": str(getattr(contract, "secType", "")),
+            "currency": str(getattr(contract, "currency", "")),
+            "account_hash": account_hash(str(getattr(order, "account", ""))),
+            "action": str(getattr(order, "action", "")),
+            "quantity": str(getattr(order, "totalQuantity", "0")),
+            "order_type": str(getattr(order, "orderType", "")),
+            "limit_price": str(getattr(order, "lmtPrice", "0")),
+            "aux_price": str(getattr(order, "auxPrice", "0")),
+            "time_in_force": str(getattr(order, "tif", "")),
+            "transmit": bool(getattr(order, "transmit", False)),
+            "oca_group": str(getattr(order, "ocaGroup", "")),
+            "outside_regular_hours": bool(getattr(order, "outsideRth", False)),
+            "good_till_date": str(getattr(order, "goodTillDate", "")),
+            "status": str(getattr(orderState, "status", "")),
+        }
         self._observe(
             IBKRFactType.OPEN_ORDER,
-            {
-                "order_id": orderId,
-                "perm_id": int(getattr(order, "permId", 0)),
-                "parent_id": int(getattr(order, "parentId", 0)),
-                "client_id": int(getattr(order, "clientId", 0)),
-                "order_ref": str(getattr(order, "orderRef", "")),
-                "symbol": str(contract.symbol),
-                "action": str(getattr(order, "action", "")),
-                "quantity": str(getattr(order, "totalQuantity", "0")),
-                "status": str(getattr(orderState, "status", "")),
-            },
-            key=f"{self.client_id if hasattr(self, 'client_id') else 0}:{orderId}:{getattr(order, 'permId', 0)}",
+            payload,
+            key=self.observer.order_identity(payload) if self.observer else str(orderId),
         )
 
     def openOrderEnd(self) -> None:
-        self._observe(IBKRFactType.OPEN_ORDER_END, {}, key="end")
+        epoch = self.observer.barrier.open_orders_epoch if self.observer and self.observer.barrier else ""
+        self._observe(IBKRFactType.OPEN_ORDER_END, {"epoch": epoch}, key=epoch or "end")
 
     def positionEnd(self) -> None:
-        self._observe(IBKRFactType.POSITION_END, {}, key="end")
+        epoch = self.observer.barrier.position_epoch if self.observer and self.observer.barrier else ""
+        self._observe(IBKRFactType.POSITION_END, {"epoch": epoch}, key=epoch or "end")
 
     def execDetailsEnd(self, reqId: int) -> None:
         self._observe(IBKRFactType.EXECUTION_END, {"request_id": reqId}, key=str(reqId))
@@ -285,61 +324,139 @@ class IBKRBroker:
         self.thread: threading.Thread | None = None
         self._idempotency: dict[str, int] = {}
 
-    async def connect(self, timeout: float = 10) -> None:
+    async def connect_transport_only(self, timeout: float = 10) -> None:
+        """Establish transport readiness without starting any snapshot subscription."""
+        self.app.connected_event.clear()
         self.app.connect(self.host, self.port, self.client_id)
-        self.thread = threading.Thread(target=self.app.run, daemon=True)
+        self.thread = threading.Thread(target=self.app.run, name="ibkr-network", daemon=True)
         self.thread.start()
         ok = await asyncio.to_thread(self.app.connected_event.wait, timeout)
         if not ok:
             self.app.disconnect()
             raise TimeoutError("IBKR nextValidId was not received")
-        self.app.reqPositions()
-        self.app.reqAccountSummary(9001, "All", "NetLiquidation,TotalCashValue,BuyingPower")
+
+    async def connect(self, timeout: float = 10) -> None:
+        await self.connect_transport_only(timeout)
 
     async def observe_read_only(
-        self, store: IBKRFactStore, *, timeout: float = 10
+        self,
+        store: IBKRFactStore,
+        *,
+        timeout: float = 10,
+        drain_quiet_period: float = 0.2,
     ) -> tuple[SnapshotCompletenessCertificate, IBKRReadModel]:
         """Request account/order/position/execution truth without any broker write call."""
         if self.port not in {4002, 7497}:
             raise RuntimeError("read-only observer only permits standard IBKR paper ports")
+        if not self.account:
+            raise RuntimeError("read-only observer requires one explicitly configured Paper account")
+        started_at = datetime.now(UTC)
         session_id = store.start_session(
             host=self.host,
             port=self.port,
             client_id=self.client_id,
-            at=datetime.now(UTC),
+            at=started_at,
         )
-        collector = IBKRCallbackCollector(store, session_id)
+        request_seed = int(session_id[:6], 16) % 100_000 + 10_000
+        barrier = ObserverRequestBarrier(
+            account_request_id=request_seed,
+            execution_request_id=request_seed + 1,
+            position_epoch=canonical_hash({"session": session_id, "request": "positions"}),
+            open_orders_epoch=canonical_hash({"session": session_id, "request": "open-orders"}),
+            execution_history_start=started_at - timedelta(days=1),
+            execution_history_end=started_at,
+        )
+        bridge = IBKRFactBridge(store.path)
+        collector = IBKRCallbackCollector(
+            bridge,
+            session_id,
+            barrier=barrier,
+            configured_account=self.account,
+            client_id=self.client_id,
+        )
         self.app.observer = collector
-        if await self.is_connected():
+        if not await self.is_connected():
+            await self.connect_transport_only(timeout)
+        collector.record(
+            IBKRFactType.CONNECTION,
+            {"connected": True},
+            identity_key="connected",
+        )
+        if self.app.next_order_id is not None:
             collector.record(
-                IBKRFactType.CONNECTION,
-                {"connected": True},
-                identity_key="connected",
+                IBKRFactType.NEXT_VALID_ID,
+                {"order_id": self.app.next_order_id},
+                identity_key=str(self.app.next_order_id),
             )
-            if self.app.next_order_id is not None:
-                collector.record(
-                    IBKRFactType.NEXT_VALID_ID,
-                    {"order_id": self.app.next_order_id},
-                    identity_key=str(self.app.next_order_id),
-                )
+        for request_type, request_id in (
+            ("ACCOUNT_SUMMARY", barrier.account_request_id),
+            ("EXECUTIONS", barrier.execution_request_id),
+            ("POSITIONS", barrier.position_epoch),
+            ("OPEN_ORDERS", barrier.open_orders_epoch),
+        ):
+            collector.record(
+                IBKRFactType.REQUEST_START,
+                {"request_type": request_type, "request_id": request_id},
+                identity_key=f"{request_type}:{request_id}",
+            )
         self.app.reqCurrentTime()
         self.app.reqManagedAccts()
         self.app.reqAccountSummary(
-            9101,
-            "All",
+            barrier.account_request_id,
+            self.account,
             "NetLiquidation,TotalCashValue,SettledCash,BuyingPower,AccruedCash",
         )
         self.app.reqAllOpenOrders()
         self.app.reqPositions()
-        self.app.reqExecutions(9102, ExecutionFilter())
+        execution_filter = ExecutionFilter()
+        if hasattr(execution_filter, "acctCode"):
+            execution_filter.acctCode = self.account
+        self.app.reqExecutions(barrier.execution_request_id, execution_filter)
         deadline = time.monotonic() + timeout
-        certificate = collector.certificate(at=datetime.now(UTC))
-        while not certificate.complete and time.monotonic() < deadline:
+        certificate: SnapshotCompletenessCertificate | None = None
+        while time.monotonic() < deadline:
             await asyncio.sleep(0.05)
-            certificate = collector.certificate(at=datetime.now(UTC))
+            drained = bridge.drain(timeout=0.1, quiet_period=0.01)
+            certificate = collector.certificate(
+                store,
+                at=datetime.now(UTC),
+                queue_drained=drained,
+                queue_depth=bridge.depth,
+                writer_error=bridge.writer_error,
+                final_watermark=bridge.written,
+            )
+            if certificate.complete:
+                break
             if certificate.critical_errors or certificate.disconnected:
                 break
-        return certificate, IBKRFactReducer.reduce(store.facts(session_id))
+        bridge.drain(timeout=max(0.1, min(timeout, 5)), quiet_period=drain_quiet_period)
+        collector.record(
+            IBKRFactType.DRAIN_WATERMARK,
+            {"accepted": bridge.accepted, "written": bridge.written},
+            identity_key=f"watermark:{bridge.accepted}",
+        )
+        bridge.drain(timeout=max(0.1, min(timeout, 5)), quiet_period=drain_quiet_period)
+        self.app.observer = None
+        if hasattr(self.app, "cancelAccountSummary"):
+            self.app.cancelAccountSummary(barrier.account_request_id)
+        if hasattr(self.app, "cancelPositions"):
+            self.app.cancelPositions()
+        if hasattr(self.app, "disconnect"):
+            self.app.disconnect()
+        network_thread = getattr(self, "thread", None)
+        if network_thread is not None:
+            await asyncio.to_thread(network_thread.join, min(timeout, 5))
+        bridge.close(timeout=max(0.1, min(timeout, 5)))
+        certificate = collector.certificate(
+            store,
+            at=datetime.now(UTC),
+            queue_drained=(bridge.depth == 0 and bridge.written == bridge.accepted),
+            queue_depth=bridge.depth,
+            writer_error=bridge.writer_error,
+            final_watermark=bridge.written,
+        )
+        facts = store.facts(session_id)
+        return certificate, IBKRFactReducer.reduce(facts)
 
     async def is_connected(self) -> bool:
         return bool(self.app.isConnected())
@@ -418,6 +535,7 @@ class IBKRBroker:
         parent.totalQuantity = request.quantity
         parent.lmtPrice = request.limit_price
         parent.transmit = False
+        parent.orderRef = f"HA:{request.idempotency_key[:48]}"
         if self.account:
             parent.account = self.account
 
@@ -429,6 +547,7 @@ class IBKRBroker:
         target.lmtPrice = request.target_price
         target.parentId = parent_id
         target.transmit = False
+        target.orderRef = f"HA:{request.idempotency_key[:48]}"
         if self.account:
             target.account = self.account
 
@@ -440,6 +559,7 @@ class IBKRBroker:
         stop.auxPrice = request.stop_price
         stop.parentId = parent_id
         stop.transmit = True
+        stop.orderRef = f"HA:{request.idempotency_key[:48]}"
         if self.account:
             stop.account = self.account
 
@@ -484,6 +604,7 @@ class IBKRBroker:
         order.totalQuantity = quantity
         order.lmtPrice = limit_price
         order.transmit = True
+        order.orderRef = f"HA:{internal_id[:48]}"
         if self.account:
             order.account = self.account
         self.app.placeOrder(broker_id, contract, order)

@@ -13,7 +13,8 @@ for path in "${required[@]}"; do
 done
 
 if grep -RInE '(API_KEY|TOKEN|PASSWORD|SECRET)[[:space:]]*=[[:space:]]*[^[:space:]#]{8,}' . \
-  --exclude-dir=.git --exclude-dir=.venv --exclude='.env.example' --exclude='*.md'; then
+  --exclude-dir=.git --exclude-dir=.venv --exclude-dir=node_modules --exclude-dir=dist \
+  --exclude='.env.example' --exclude='*.md'; then
   echo "possible embedded secret found" >&2
   exit 1
 fi

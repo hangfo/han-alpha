@@ -273,6 +273,8 @@ class BrokerSnapshot(BaseModel):
     currency_balances: dict[str, Decimal] = Field(default_factory=dict)
     complete: bool = True
     completeness_certificate_id: str | None = None
+    semantic_hash: str | None = None
+    visibility_scope_hash: str | None = None
     orders: tuple[BrokerOrderTruth, ...]
     positions: dict[str, int]
     protections: dict[str, int]

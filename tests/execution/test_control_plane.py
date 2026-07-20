@@ -7,6 +7,7 @@ import pytest
 
 from hanalpha.domain.enums import Side
 from hanalpha.execution.control_models import (
+    BrokerSnapshot,
     DecisionCapsule,
     ExecutionIntent,
     ExecutionStatus,
@@ -83,6 +84,29 @@ def _allow_fixture_staging(store: DurableExecutionStore) -> None:
     store.unfreeze_after_reconciliation(at=NOW)
 
 
+def _record_authority(store: DurableExecutionStore, *, discriminator: str = "authority") -> str:
+    semantic_hash = canonical_hash({"semantic": discriminator})
+    snapshot = BrokerSnapshot(
+        as_of=NOW,
+        cash=Decimal("100000"),
+        complete=True,
+        completeness_certificate_id=canonical_hash({"certificate": discriminator}),
+        semantic_hash=semantic_hash,
+        visibility_scope_hash=canonical_hash({"scope": discriminator}),
+        orders=(),
+        positions={},
+        protections={},
+        events=(),
+    )
+    store.record_broker_snapshot_authority(
+        snapshot,
+        reconciliation_run_id=canonical_hash({"run": discriminator}),
+        reconciliation_status="CONVERGED",
+        at=NOW,
+    )
+    return semantic_hash
+
+
 @pytest.mark.parametrize("failpoint", ["after_capsule", "after_reservation", "after_outbox"])
 def test_stage_is_atomic_across_crash_boundaries(tmp_path, failpoint) -> None:
     store = DurableExecutionStore(tmp_path / f"{failpoint}.sqlite3")
@@ -121,13 +145,151 @@ def test_manual_approval_and_outbox_survive_restart_exactly_once(tmp_path) -> No
             reopened.connection.execute("SELECT COUNT(*) FROM operator_approvals").fetchone()[0]
             == 1
         )
-        assert (
-            reopened.connection.execute("SELECT COUNT(*) FROM outbox_commands").fetchone()[0] == 1
+        assert reopened.connection.execute("SELECT COUNT(*) FROM outbox_commands").fetchone()[0] == 0
+        authority_hash = _record_authority(reopened)
+        arm_id = reopened.arm_approved_intent(
+            intent.intent_id,
+            broker_snapshot_hash=authority_hash,
+            quote_hash=canonical_hash({"quote": "fresh"}),
+            current_limit_price=Decimal("100.02"),
+            max_drift_bps=Decimal("5"),
+            at=NOW,
+            expires_at=NOW + timedelta(minutes=1),
         )
+        assert len(arm_id) == 64
+        assert reopened.connection.execute("SELECT COUNT(*) FROM outbox_commands").fetchone()[0] == 1
         with pytest.raises(ExecutionInvariantError, match="different approval"):
             reopened.approve(intent.intent_id, actor_id="operator-2", at=NOW)
     finally:
         reopened.close()
+
+
+def test_durable_cancel_survives_freeze_and_unknown_response(tmp_path) -> None:
+    store = DurableExecutionStore(tmp_path / "control.sqlite3")
+    broker = DurableFakeBroker(tmp_path / "broker.sqlite3")
+    capsule, reservation, intent = _contracts(discriminator="durable-cancel")
+    try:
+        _unfreeze(store, broker)
+        store.stage(capsule, reservation, intent)
+        lease = store.acquire_lease(
+            "broker-writer", owner_id="worker", at=NOW, ttl=timedelta(minutes=1)
+        )
+        worker = ExecutionWorker(store, broker, lease)
+        assert worker.dispatch_once(at=NOW)
+        store.open_freeze_ticket("MANUAL_FREEZE", source="test", at=NOW)
+        first_id = store.request_cancel(intent.intent_id, actor_id="operator", at=NOW)
+        assert store.request_cancel(intent.intent_id, actor_id="operator", at=NOW) == first_id
+        broker.enqueue(FakeScenario.CANCEL_DROP_RESPONSE)
+        assert worker.dispatch_cancel_once(at=NOW + timedelta(seconds=1))
+        assert store.intent(intent.intent_id)["status"] == ExecutionStatus.CANCEL_UNKNOWN
+        assert broker.snapshot(at=NOW).orders[0].status == "CANCELLED"
+        assert store.request_cancel(intent.intent_id, actor_id="operator", at=NOW) == first_id
+    finally:
+        broker.close()
+        store.close()
+
+
+def test_cancel_before_submission_is_local_durable_and_releases_risk(tmp_path) -> None:
+    store = DurableExecutionStore(tmp_path / "control.sqlite3")
+    capsule, reservation, intent = _contracts(discriminator="local-cancel")
+    try:
+        _allow_fixture_staging(store)
+        store.stage(capsule, reservation, intent)
+        command_id = store.request_cancel(intent.intent_id, actor_id="operator", at=NOW)
+        assert store.request_cancel(intent.intent_id, actor_id="operator", at=NOW) == command_id
+        assert store.intent(intent.intent_id)["status"] == ExecutionStatus.CANCELLED
+        assert store.connection.execute("SELECT status FROM outbox_commands").fetchone()[0] == "DELIVERED"
+        assert store.connection.execute("SELECT status FROM cancel_commands").fetchone()[0] == "DELIVERED"
+        assert store.active_reserved_notional("paper-account") == Decimal("0")
+    finally:
+        store.close()
+
+
+def test_authoritative_reconciliation_requires_semantic_consensus(tmp_path) -> None:
+    store = DurableExecutionStore(tmp_path / "control.sqlite3")
+    broker = DurableFakeBroker(tmp_path / "broker.sqlite3")
+    try:
+        raw = broker.snapshot(at=NOW)
+        incomplete = raw.model_copy(update={"complete": False})
+        assert Reconciler(store).reconcile_authoritative(incomplete, at=NOW).status == "INCOMPLETE_SNAPSHOT"
+
+        snapshot = raw.model_copy(
+            update={
+                "completeness_certificate_id": canonical_hash({"certificate": 1}),
+                "semantic_hash": canonical_hash({"semantic": 1}),
+                "visibility_scope_hash": canonical_hash({"scope": 1}),
+            }
+        )
+        first = Reconciler(store).reconcile_authoritative(snapshot, at=NOW)
+        assert first.status == "AWAITING_CONSENSUS"
+        assert first.frozen
+        second = Reconciler(store).reconcile_authoritative(
+            snapshot, at=NOW + timedelta(seconds=2)
+        )
+        assert second.status == "CONVERGED"
+        authority = store.latest_broker_snapshot_authority()
+        assert authority is not None
+        assert authority["semantic_hash"] == snapshot.semantic_hash
+    finally:
+        broker.close()
+        store.close()
+
+
+def test_cash_bridge_starts_a_new_projection_baseline_epoch(tmp_path) -> None:
+    store = DurableExecutionStore(tmp_path / "control.sqlite3")
+    try:
+        initial = BrokerSnapshot(
+            as_of=NOW,
+            cash=Decimal("100000"),
+            settled_cash=Decimal("100000"),
+            buying_power=Decimal("200000"),
+            accrued_cash=Decimal("0"),
+            orders=(),
+            positions={},
+            protections={},
+            events=(),
+        )
+        store.set_account_baseline(initial)
+        store.connection.execute(
+            "UPDATE cash_projection SET cash_delta='-1000', commissions='2' WHERE singleton=1"
+        )
+        store.connection.commit()
+        assert store.expected_account_cash() == Decimal("99000")
+
+        unexplained = store.record_cash_bridge(
+            event_type="mystery",
+            amount=Decimal("500"),
+            currency="USD",
+            at=NOW,
+            evidence={},
+            explained=False,
+        )
+        with pytest.raises(ExecutionInvariantError, match="explained bridge"):
+            store.advance_account_baseline_epoch(initial, bridge_id=unexplained, at=NOW)
+
+        bridge_id = store.record_cash_bridge(
+            event_type="DEPOSIT",
+            amount=Decimal("500"),
+            currency="USD",
+            at=NOW + timedelta(seconds=1),
+            evidence={"reference_hash": canonical_hash({"deposit": 1})},
+            explained=True,
+        )
+        refreshed = initial.model_copy(
+            update={"as_of": NOW + timedelta(seconds=1), "cash": Decimal("99500")}
+        )
+        store.advance_account_baseline_epoch(
+            refreshed, bridge_id=bridge_id, at=NOW + timedelta(seconds=1)
+        )
+        assert store.expected_account_cash() == Decimal("99500")
+        store.connection.execute(
+            "UPDATE cash_projection SET cash_delta='-1100' WHERE singleton=1"
+        )
+        store.connection.commit()
+        assert store.expected_account_fields()["cash"] == Decimal("99400")
+        assert store.expected_account_fields()["settled_cash"] is None
+    finally:
+        store.close()
 
 
 def test_two_writers_cannot_overreserve_same_account_capacity(tmp_path) -> None:
