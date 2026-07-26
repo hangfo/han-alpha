@@ -75,7 +75,7 @@ Then visit `http://127.0.0.1:8000/docs`.
 
    ```bash
    hanalpha local-onboard set-secret --name ibkr-account
-   hanalpha local-onboard ibkr --github-summary
+   hanalpha local-onboard ibkr --read-only-attested --github-summary
    hanalpha e1 run --scope api --dry-run --github-summary
    ```
 

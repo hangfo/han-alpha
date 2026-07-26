@@ -14,7 +14,8 @@ VERIFIED:
   optional.
 - `local-onboard ibkr` produces redacted, structured readiness and may launch an
   already installed application, but never accepts a license, logs in or handles
-  2FA for the user.
+  2FA for the user. It can poll the configured socket for at most five minutes
+  and, after explicit Read-Only attestation, runs and registers Preflight.
 - `e1 run` resumes independent API/ALL matrices, counts only verified eligible
   in-scope Sessions and captures at most one Session per explicit invocation.
 - `r1 run` uses fixed bounded source slates, makes no network request in dry-run
@@ -27,7 +28,7 @@ VERIFIED:
   paths disclose exception class only and redact known values, query keys,
   authorization headers, account fields and tracebacks.
 - `./scripts/preflight.sh`: PASS in Python 3.12.13.
-- `./scripts/verify_all.sh`: PASS; 254 Python tests, 85.21% branch-aware
+- `./scripts/verify_all.sh`: PASS; 255 Python tests, 85.23% branch-aware
   coverage, Ruff, strict mypy over 115 source files, sdist/wheel,
   CLI/API/synthetic/backtest smoke checks, 2 Vitest tests, frontend
   lint/typecheck and Vite production build.

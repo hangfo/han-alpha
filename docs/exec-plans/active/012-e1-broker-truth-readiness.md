@@ -38,9 +38,11 @@ capability.
 - Ops and the read-only Dashboard use Artifact Registry and Corpus evidence rather
   than hard-coded restart/Golden Tape counters.
 - `hanalpha local-onboard ibkr` reports exact installation/account/socket gates
-  without exposing account identifiers. `hanalpha e1 run` resumes API and ALL
-  matrices independently, captures at most one Session per explicit invocation,
-  and emits GitHub-safe status plus stable human/external/code exit classes.
+  without exposing account identifiers, polls only a bounded local socket and
+  registers Preflight after explicit Read-Only attestation. `hanalpha e1 run`
+  resumes API and ALL matrices independently, captures at most one Session per
+  explicit invocation, recomputes its Corpus, and emits GitHub-safe status plus
+  stable human/external/code exit classes.
 
 ## External sequence
 

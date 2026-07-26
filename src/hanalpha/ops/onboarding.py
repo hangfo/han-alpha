@@ -6,6 +6,7 @@ import platform
 import socket
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import IntEnum, StrEnum
@@ -137,6 +138,29 @@ def launch_ibkr_application(applications: tuple[Path, ...] | None = None) -> str
     if result.returncode != 0:
         raise RuntimeError("failed to launch installed IBKR application")
     return _app_kind(selected)
+
+
+def wait_for_ibkr_socket(
+    host: str,
+    port: int,
+    *,
+    timeout_seconds: float,
+    probe: Callable[[str, int], bool] | None = None,
+    interval_seconds: float = 1.0,
+) -> bool:
+    """Poll only the configured local Paper socket for a bounded interval."""
+
+    if timeout_seconds < 0 or timeout_seconds > 300:
+        raise ValueError("timeout_seconds must be between 0 and 300")
+    check = probe or _port_ready
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        if check(host, port):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(interval_seconds, remaining))
 
 
 def github_safe_summary(report: dict[str, Any]) -> str:

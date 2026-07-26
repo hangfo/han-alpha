@@ -55,6 +55,7 @@ from hanalpha.ops.onboarding import (
     inspect_ibkr_onboarding,
     launch_ibkr_application,
     status_exit,
+    wait_for_ibkr_socket,
 )
 from hanalpha.ops.secrets import (
     LocalSecret,
@@ -723,6 +724,12 @@ def pit_evidence_list(
 def local_onboard_ibkr(
     output: Annotated[Path, typer.Option("--output")] = Path(".state/onboarding"),
     launch: Annotated[bool, typer.Option("--launch/--no-launch")] = False,
+    wait_seconds: Annotated[
+        float, typer.Option("--wait-seconds", min=0.0, max=300.0)
+    ] = 0.0,
+    read_only_attested: Annotated[
+        bool, typer.Option("--read-only-attested/--read-only-not-attested")
+    ] = False,
     github_summary_output: Annotated[
         bool, typer.Option("--github-summary/--no-github-summary")
     ] = False,
@@ -745,6 +752,12 @@ def local_onboard_ibkr(
             }
             console.print(github_safe_summary(report))
             raise typer.Exit(code=status_exit(OperatorStatus.BLOCKED_HUMAN_ACTION)) from None
+    if wait_seconds:
+        wait_for_ibkr_socket(
+            secrets.ibkr_host,
+            secrets.ibkr_port,
+            timeout_seconds=wait_seconds,
+        )
     report = inspect_ibkr_onboarding(
         config,
         secrets,
@@ -752,6 +765,37 @@ def local_onboard_ibkr(
         provider=provider,
         at=datetime.now(UTC),
     )
+    if report["status"] is OperatorStatus.PASS and not read_only_attested:
+        report_body = {
+            key: value for key, value in report.items() if key != "report_id"
+        }
+        report_body["status"] = OperatorStatus.BLOCKED_HUMAN_ACTION
+        report_body["blockers"] = ["ATTEST_TWS_READ_ONLY_FOR_ACCOUNT_PREFLIGHT"]
+        report_body["next_permitted_command"] = (
+            "hanalpha local-onboard ibkr --read-only-attested"
+        )
+        report = {"report_id": canonical_hash(report_body), **report_body}
+    elif report["status"] is OperatorStatus.PASS:
+        preflight_code = _run_secret_child(
+            [
+                "ibkr-preflight",
+                "--read-only-attested",
+                "--output",
+                str(output / "preflight"),
+                "--registry",
+                secrets.hanalpha_artifact_registry_path,
+            ],
+            secrets,
+        )
+        report_body = {
+            key: value for key, value in report.items() if key != "report_id"
+        }
+        report_body["preflight_registered"] = preflight_code == 0
+        if preflight_code != 0:
+            report_body["status"] = OperatorStatus.FAILED_CODE
+            report_body["blockers"] = ["INSPECT_REDACTED_IBKR_PREFLIGHT"]
+            report_body["next_permitted_command"] = None
+        report = {"report_id": canonical_hash(report_body), **report_body}
     destination = output / f"{report['report_id']}.json"
     write_immutable_json(destination, report)
     if github_summary_output:
@@ -900,6 +944,24 @@ def e1_run(
                 }
             else:
                 progress = e1_progress(scope_root, scope)
+                corpus_code = _run_secret_child(
+                    [
+                        "ibkr-burn-in-evaluate",
+                        "--input",
+                        str(scope_root),
+                        "--output",
+                        str(scope_root / "corpus.json"),
+                        "--registry",
+                        secrets.hanalpha_artifact_registry_path,
+                    ],
+                    secrets,
+                )
+                if corpus_code not in {0, 2}:
+                    progress = {
+                        **progress,
+                        "status": OperatorStatus.FAILED_CODE,
+                        "next_human_action": "INSPECT_REDACTED_CORPUS_EVALUATION",
+                    }
     progress_body = {key: value for key, value in progress.items() if key != "report_id"}
     progress = {"report_id": canonical_hash(progress_body), **progress_body}
     destination = scope_root / f"{progress['report_id']}.runner.json"

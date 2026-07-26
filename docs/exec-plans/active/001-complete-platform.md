@@ -71,7 +71,7 @@ Record important decisions here with date, alternatives, and consequences. Do no
   preferred SecretProvider; E1/R1 runners are resumable and fail closed;
   qualification documents are strict and Registry objects portable; probes bind
   literal transport bytes, safe headers and normalized JSON separately. Full
-  local verification passed 254 Python tests at 85.21% branch coverage and the
+  local verification passed 255 Python tests at 85.23% branch coverage and the
   complete package/API/frontend/security suite. The local machine still lacks
   TWS/Gateway, official `ibapi`, Paper login/account and data-source identities,
   so no Broker/vendor request was made and E1-B/R1-B remain external.

@@ -92,10 +92,11 @@ IBKR_ACCOUNT=<paper-account>
 Then:
 
 ```bash
-hanalpha local-onboard ibkr --github-summary
+hanalpha local-onboard ibkr --read-only-attested --github-summary
 
 # The runner is resumable and captures at most one verified Session per
-# invocation. Dry-run performs no Broker request.
+# invocation, then recomputes and registers its Scope Corpus. Dry-run performs
+# no Broker request.
 hanalpha e1 run --scope api --dry-run --github-summary
 
 hanalpha ibkr-preflight --read-only-attested

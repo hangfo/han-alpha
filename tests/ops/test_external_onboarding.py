@@ -22,6 +22,7 @@ from hanalpha.ops.onboarding import (
     inspect_ibkr_onboarding,
     launch_ibkr_application,
     status_exit,
+    wait_for_ibkr_socket,
 )
 from hanalpha.ops.secrets import (
     EnvironmentSecretProvider,
@@ -205,6 +206,25 @@ def test_local_detection_helpers_are_bounded_and_non_mutating() -> None:
     assert onboarding_module._port_ready("127.0.0.1", 1) is False
     assert onboarding_module._ibapi_version() is None
     assert onboarding_module._app_kind(Path("TWS.app")) == "TWS"
+    attempts = iter((False, True))
+    assert wait_for_ibkr_socket(
+        "127.0.0.1",
+        7497,
+        timeout_seconds=1,
+        probe=lambda _host, _port: next(attempts),
+        interval_seconds=0,
+    )
+    assert (
+        wait_for_ibkr_socket(
+            "127.0.0.1",
+            7497,
+            timeout_seconds=0,
+            probe=lambda _host, _port: False,
+        )
+        is False
+    )
+    with pytest.raises(ValueError, match="between 0 and 300"):
+        wait_for_ibkr_socket("127.0.0.1", 7497, timeout_seconds=301)
 
 
 def test_e1_progress_starts_with_bounded_next_action(tmp_path) -> None:
@@ -472,9 +492,10 @@ def test_e1_cli_ready_path_runs_one_redacted_child_capture(tmp_path, monkeypatch
         ],
     )
     assert result.exit_code == 0
-    assert len(child_calls) == 2
+    assert len(child_calls) == 3
     assert all("DU-LOCAL" not in " ".join(arguments) for arguments in child_calls)
     assert "--read-only-attested" in child_calls[0]
+    assert child_calls[2][0] == "ibkr-burn-in-evaluate"
     assert "secrets_redacted=true" in result.output
 
 
@@ -534,6 +555,60 @@ def test_e1_cli_classifies_preflight_and_capture_failures(tmp_path, monkeypatch)
     )
     assert capture.exit_code == 1
     assert "INSPECT_REDACTED_LOCAL_CAPTURE_LOGS" in capture.output
+
+
+def test_onboarding_ready_path_requires_attestation_then_registers_preflight(
+    tmp_path, monkeypatch
+) -> None:
+    provider = FakeProvider({LocalSecret.IBKR_ACCOUNT: "DU-LOCAL"})
+    settings = SecretSettings(
+        _env_file=None,
+        ibkr_account="DU-LOCAL",
+        ibkr_port=7497,
+        hanalpha_artifact_registry_path=str(tmp_path / "registry.sqlite3"),
+    )
+    monkeypatch.setattr(cli_module, "_local_settings", lambda: (settings, provider))
+    monkeypatch.setattr(
+        cli_module,
+        "inspect_ibkr_onboarding",
+        lambda *args, **kwargs: {
+            "schema_version": "hanalpha-local-onboarding-v1",
+            "report_id": "a" * 64,
+            "status": OperatorStatus.PASS,
+            "checks": {"ready": True},
+            "blockers": [],
+            "git_commit": "c" * 40,
+            "next_permitted_command": "hanalpha e1 run --scope api",
+            "secrets_redacted": True,
+        },
+    )
+    runner = CliRunner()
+    unattested = runner.invoke(
+        app,
+        ["local-onboard", "ibkr", "--output", str(tmp_path / "unattested")],
+    )
+    assert unattested.exit_code == 20
+    assert "ATTEST_TWS_READ_ONLY_FOR_ACCOUNT_PREFLIGHT" in unattested.output
+
+    child_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        cli_module,
+        "_run_secret_child",
+        lambda arguments, _secrets: child_calls.append(arguments) or 0,
+    )
+    ready = runner.invoke(
+        app,
+        [
+            "local-onboard",
+            "ibkr",
+            "--output",
+            str(tmp_path / "ready"),
+            "--read-only-attested",
+        ],
+    )
+    assert ready.exit_code == 0
+    assert child_calls[0][0] == "ibkr-preflight"
+    assert "preflight_registered" in ready.output
 
 
 def test_r1_cli_sanitizes_runner_exception(tmp_path, monkeypatch) -> None:
