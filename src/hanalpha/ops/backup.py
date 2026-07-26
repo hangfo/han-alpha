@@ -112,12 +112,27 @@ def restore_databases(
     generation_id = str(document["generation_id"])
     final_generation = generations / generation_id
     current = destination / "CURRENT"
-    if current.exists() and not overwrite:
+    current_target = current_generation(destination)
+    if current.is_symlink() and not overwrite:
         raise FileExistsError(current)
     if final_generation.exists():
-        if not overwrite:
-            raise FileExistsError(final_generation)
-        shutil.rmtree(final_generation)
+        installed_manifest = final_generation / "manifest.json"
+        if (
+            not installed_manifest.is_file()
+            or _validated_manifest(installed_manifest)["cross_store_manifest_hash"]
+            != document["cross_store_manifest_hash"]
+        ):
+            raise RuntimeError("existing generation is not the requested complete generation")
+        if current_target == final_generation.resolve():
+            return final_generation
+        if not overwrite and current.is_symlink():
+            raise FileExistsError(current)
+        temporary_link = destination / ".CURRENT.restore-tmp"
+        temporary_link.unlink(missing_ok=True)
+        temporary_link.symlink_to(Path("generations") / generation_id)
+        os.replace(temporary_link, current)
+        _fsync_path(destination)
+        return final_generation
     temporary = generations / f".{generation_id}.restore-tmp"
     if temporary.exists():
         shutil.rmtree(temporary)

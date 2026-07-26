@@ -156,18 +156,14 @@ class Reconciler:
                         at.isoformat(),
                     ),
                 )
-            self.store.open_freeze_ticket(
-                "INCOMPLETE_BROKER_SNAPSHOT", source="reconciler", at=at
-            )
+            self.store.open_freeze_ticket("INCOMPLETE_BROKER_SNAPSHOT", source="reconciler", at=at)
             return ReconciliationReport(
                 run_id=run_id,
                 status="INCOMPLETE_SNAPSHOT",
                 discrepancies=(discrepancy,),
                 frozen=True,
             )
-        self.store.open_freeze_ticket(
-            "RECONCILIATION_IN_PROGRESS", source="reconciler", at=at
-        )
+        self.store.open_freeze_ticket("RECONCILIATION_IN_PROGRESS", source="reconciler", at=at)
         with self.store.connection:
             self.store.connection.execute(
                 "INSERT INTO reconciliation_runs VALUES (?, ?, NULL, 'RUNNING', NULL)",
@@ -319,7 +315,11 @@ class Reconciler:
             for field_name in ("settled_cash", "buying_power", "accrued_cash"):
                 expected = expected_fields[field_name]
                 actual = getattr(snapshot, field_name)
-                if expected is not None and actual is not None and abs(expected - actual) > Decimal("0.01"):
+                if (
+                    expected is not None
+                    and actual is not None
+                    and abs(expected - actual) > Decimal("0.01")
+                ):
                     discrepancies.append(
                         self._discrepancy(
                             DiscrepancySeverity.WARNING,
@@ -379,6 +379,27 @@ class Reconciler:
         with self.store.connection:
             for item in discrepancies:
                 self.store.connection.execute(
+                    """UPDATE reconciliation_discrepancies
+                       SET lifecycle_status='SUPERSEDED', resolved_at=?,
+                           resolution_evidence=?
+                       WHERE kind=? AND entity_key=? AND discrepancy_id<>?
+                         AND lifecycle_status='OPEN'""",
+                    (
+                        at.isoformat(),
+                        json.dumps(
+                            {
+                                "resolution": "superseded_by_new_observation",
+                                "successor_discrepancy_id": item.discrepancy_id,
+                                "run_id": run_id,
+                            },
+                            sort_keys=True,
+                        ),
+                        item.kind,
+                        item.entity_key,
+                        item.discrepancy_id,
+                    ),
+                )
+                self.store.connection.execute(
                     """INSERT OR IGNORE INTO reconciliation_discrepancies
                        (discrepancy_id, run_id, severity, kind, entity_key, details_json,
                         resolved_at, first_seen_at, last_seen_at, lifecycle_status,
@@ -416,7 +437,10 @@ class Reconciler:
                         (
                             at.isoformat(),
                             json.dumps(
-                                {"resolution": "absent_from_later_reconciliation", "run_id": run_id},
+                                {
+                                    "resolution": "absent_from_later_reconciliation",
+                                    "run_id": run_id,
+                                },
                                 sort_keys=True,
                             ),
                             row["discrepancy_id"],

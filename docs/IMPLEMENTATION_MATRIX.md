@@ -27,7 +27,7 @@ Status values: `DONE` means implemented with local evidence; `PARTIAL` means use
 | LLM Evidence Service | DONE M4 LOCAL | PIT documents, exact citations, expiry/conflicts, abstention, cache, persistent budgets/attempts, no-trade review firewall and ablation accounting; real Provider and PIT value are BLOCKED |
 | Durable execution control plane | DONE M5 LOCAL | Frozen capsule, combined account reservation, approval API/CLI receipt, outbox/inbox, durable freeze tickets, early fence publication, exact cash, per-parent Protection Graph, strict Unknown escrow, persistent Fake Broker and reconciliation |
 | IBKR Paper validation | PARTIAL M6 LOCAL | Queue single-writer observer, semantic barriers/certificate, visibility scope, M5 snapshot adapter, consensus, durable cancel and schedule-aware shadow are local-test verified; official `ibapi`, real Paper callbacks/burn-in/cancel/bracket and every Paper order remain BLOCKED |
-| Ops Dashboard | PARTIAL M7-B LOCAL | Layered readiness, Authority/freshness timeline, discrepancy lifecycle, expanded metrics, burn-in evidence and Generation Restore are source-backed and read-only; deployed alerts/E2E and authenticated write controls are BLOCKED/NOT IMPLEMENTED |
+| Ops Dashboard | PARTIAL M7-B.1 LOCAL | Runtime Control and full Paper Canary Safety Case are separated; Authority/freshness/reason graph, corrected burn-in metrics, discrepancy revisions and Generation Restore are source-backed and read-only; deployed alerts/E2E and authenticated write controls are BLOCKED/NOT IMPLEMENTED |
 | Live Proposal review | PLANNED M8 | Proposal-only; independent security/legal/operational approval |
 | Proven post-cost alpha | NOT ESTABLISHED | Cannot be assessed before M1–M3 gates and forward observation |
 

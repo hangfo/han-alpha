@@ -19,7 +19,6 @@ from hanalpha.execution.ibkr_observer import (
     account_hash,
 )
 from hanalpha.execution.ibkr_snapshot import IBKRBrokerSnapshotAdapter
-from hanalpha.simulation.events import canonical_hash
 
 NOW = datetime(2024, 1, 1, tzinfo=UTC)
 ACCOUNT = "DU1234567"
@@ -36,9 +35,7 @@ def _barrier() -> ObserverRequestBarrier:
     )
 
 
-def _semantic_facts(
-    collector: IBKRCallbackCollector, *, cash: str = "100000"
-) -> None:
+def _semantic_facts(collector: IBKRCallbackCollector, *, cash: str = "100000") -> None:
     barrier = collector.barrier
     assert barrier is not None
     collector.record(IBKRFactType.CONNECTION, {}, identity_key="connected", at=NOW)
@@ -108,9 +105,7 @@ def test_semantic_certificate_rejects_wrong_request_barrier(tmp_path) -> None:
     )
     try:
         _semantic_facts(collector)
-        complete = collector.certificate(
-            store, at=NOW, queue_drained=True, final_watermark=12
-        )
+        complete = collector.certificate(store, at=NOW, queue_drained=True, final_watermark=12)
         assert complete.complete
         collector.record(
             IBKRFactType.ERROR,
@@ -161,6 +156,85 @@ def test_account_amounts_change_component_and_combined_authority_hashes(tmp_path
     assert hashes[0][1] != hashes[1][1]
 
 
+def test_scope_policy_excludes_observation_window_and_certificate_counts_drops(
+    tmp_path,
+) -> None:
+    certificates = []
+    for index in range(2):
+        store = IBKRFactStore(tmp_path / f"scope-{index}.sqlite3")
+        at = NOW + timedelta(seconds=index)
+        session = store.start_session(host="127.0.0.1", port=7497, client_id=19, at=at)
+        barrier = _barrier().model_copy(
+            update={
+                "account_request_id": 101 + index * 10,
+                "execution_request_id": 102 + index * 10,
+                "execution_history_end": at,
+                "completed_orders_requested": True,
+                "completed_orders_api_only": True,
+            }
+        )
+        collector = IBKRCallbackCollector(
+            store,
+            session,
+            barrier=barrier,
+            configured_account=ACCOUNT,
+            base_currency="USD",
+            client_id=19,
+        )
+        _semantic_facts(collector)
+        collector.record(
+            IBKRFactType.COMPLETED_ORDER_END,
+            {},
+            identity_key="completed-end",
+            at=at,
+        )
+        certificate = collector.certificate(
+            store,
+            at=at,
+            queue_drained=True,
+            accepted_facts=20,
+            written_facts=20,
+            dropped_facts=0,
+            final_watermark=20 + index,
+        )
+        certificates.append(certificate)
+        store.close()
+    assert certificates[0].visibility.scope_hash == certificates[1].visibility.scope_hash
+    assert (
+        certificates[0].visibility.observation_window.envelope_hash
+        != certificates[1].visibility.observation_window.envelope_hash
+    )
+    assert certificates[0].visibility.completed_orders_api_only is True
+    assert not certificates[0].visibility.manual_completed_orders_visible
+
+    store = IBKRFactStore(tmp_path / "dropped.sqlite3")
+    session = store.start_session(host="127.0.0.1", port=7497, client_id=19, at=NOW)
+    collector = IBKRCallbackCollector(
+        store,
+        session,
+        barrier=_barrier(),
+        configured_account=ACCOUNT,
+        client_id=19,
+    )
+    _semantic_facts(collector)
+    dropped = collector.certificate(
+        store,
+        at=NOW,
+        queue_drained=False,
+        accepted_facts=20,
+        written_facts=19,
+        dropped_facts=1,
+        final_watermark=19,
+    )
+    assert not dropped.complete
+    assert (dropped.accepted_facts, dropped.written_facts, dropped.dropped_facts) == (
+        20,
+        19,
+        1,
+    )
+    store.close()
+
+
 def test_callback_threads_use_queue_and_single_sqlite_writer(tmp_path) -> None:
     path = tmp_path / "observer.sqlite3"
     store = IBKRFactStore(path)
@@ -168,6 +242,7 @@ def test_callback_threads_use_queue_and_single_sqlite_writer(tmp_path) -> None:
     bridge = IBKRFactBridge(path, max_queue=2_000)
     collector = IBKRCallbackCollector(bridge, session)
     try:
+
         def produce(offset: int) -> None:
             for index in range(250):
                 collector.record(
@@ -199,12 +274,26 @@ def test_reducer_uses_native_order_identity_field_lattice_and_numeric_correction
     try:
         collector.order_status(
             7,
-            {"client_id": 1, "perm_id": 0, "status": "Filled", "filled": "10", "remaining": "0", "avg_fill_price": "101"},
+            {
+                "client_id": 1,
+                "perm_id": 0,
+                "status": "Filled",
+                "filled": "10",
+                "remaining": "0",
+                "avg_fill_price": "101",
+            },
             at=NOW,
         )
         collector.order_status(
             7,
-            {"client_id": 1, "perm_id": 0, "status": "Submitted", "filled": "0", "remaining": "10", "avg_fill_price": "0"},
+            {
+                "client_id": 1,
+                "perm_id": 0,
+                "status": "Submitted",
+                "filled": "0",
+                "remaining": "10",
+                "avg_fill_price": "0",
+            },
             at=NOW,
         )
         collector.order_status(
@@ -324,21 +413,21 @@ class _ObserverFakeApp:
         }
         parent = {**base, "order_id": 10, "parent_id": 0, "order_type": "LMT"}
         target = {
-                **base,
-                "order_id": 11,
-                "perm_id": 9002,
-                "parent_id": 10,
-                "action": "SELL",
-                "order_type": "LMT",
-            }
+            **base,
+            "order_id": 11,
+            "perm_id": 9002,
+            "parent_id": 10,
+            "action": "SELL",
+            "order_type": "LMT",
+        }
         stop = {
-                **base,
-                "order_id": 12,
-                "perm_id": 9003,
-                "parent_id": 10,
-                "action": "SELL",
-                "order_type": "STP",
-            }
+            **base,
+            "order_id": 12,
+            "perm_id": 9003,
+            "parent_id": 10,
+            "action": "SELL",
+            "order_type": "STP",
+        }
         for payload in (parent, target, stop):
             self.observer.record(
                 IBKRFactType.OPEN_ORDER,
@@ -392,9 +481,7 @@ class _ObserverFakeApp:
             },
             at=NOW,
         )
-        self.observer.commission(
-            "exec.1", {"commission": "1.25", "currency": "USD"}, at=NOW
-        )
+        self.observer.commission("exec.1", {"commission": "1.25", "currency": "USD"}, at=NOW)
         self.observer.record(
             IBKRFactType.EXECUTION_END,
             {"request_id": request_id},
@@ -450,28 +537,31 @@ async def test_observer_has_no_prerequests_drains_and_builds_reconciliation_snap
         assert snapshot.events[0].occurred_at == NOW - timedelta(seconds=1)
         assert snapshot.events[0].received_at == NOW
         first = control.register_snapshot_consensus(
-            snapshot, at=NOW, minimum_interval=timedelta(seconds=1)
-        )
-        second = control.register_snapshot_consensus(
-            snapshot,
-            at=NOW + timedelta(seconds=2),
-            minimum_interval=timedelta(seconds=1),
+            snapshot, at=snapshot.as_of, minimum_interval=timedelta(0)
         )
         assert first == (False, 1)
-        assert second == (False, 1)
-        independent = snapshot.model_copy(
-            update={
-                "as_of": snapshot.as_of + timedelta(seconds=2),
-                "completeness_certificate_id": canonical_hash({"certificate": "second"}),
-                "observation_id": canonical_hash({"observation": "second"}),
-                "session_id": canonical_hash({"session": "second"}),
-                "final_watermark": snapshot.final_watermark + 1,
-            }
+        replay = control.register_snapshot_consensus(
+            snapshot, at=snapshot.as_of, minimum_interval=timedelta(0)
         )
+        assert replay == (False, 1)
+        second_certificate, second_model = await broker.observe_read_only(
+            fact_store, timeout=0.5, drain_quiet_period=0.01
+        )
+        independent = IBKRBrokerSnapshotAdapter.build(
+            second_model,
+            second_certificate,
+            configured_account=ACCOUNT,
+            key_resolver=control,
+        )
+        assert independent.session_id != snapshot.session_id
+        assert independent.observation_id != snapshot.observation_id
+        assert independent.final_watermark > snapshot.final_watermark
+        assert independent.visibility_scope_hash == snapshot.visibility_scope_hash
+        assert independent.semantic_hash == snapshot.semantic_hash
         assert control.register_snapshot_consensus(
             independent,
-            at=NOW + timedelta(seconds=2),
-            minimum_interval=timedelta(seconds=1),
+            at=independent.as_of,
+            minimum_interval=timedelta(0),
         ) == (True, 2)
     finally:
         control.close()

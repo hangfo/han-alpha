@@ -314,9 +314,7 @@ class TradingSystem:
                     max(
                         0.0,
                         account.buying_power
-                        - float(
-                            self.execution_store.active_reserved_notional("runtime-paper")
-                        ),
+                        - float(self.execution_store.active_reserved_notional("runtime-paper")),
                     ),
                     max(
                         0.0,
@@ -488,6 +486,8 @@ class TradingSystem:
             provider=type(self.provider).__name__,
             feed_mode="SYNTHETIC" if self.config.mode == "synthetic" else "EXTERNAL",
             market_phase="UNVERIFIED",
+            venue="SMART",
+            currency=self.config.base_currency,
             recorded_at=ensure_aware_utc(observed_at),
         )
 
@@ -527,6 +527,7 @@ async def build_system(config: AppConfig, secrets: SecretSettings, ledger: Ledge
             port=secrets.ibkr_port,
             client_id=secrets.ibkr_client_id,
             account=secrets.ibkr_account,
+            base_currency=config.base_currency,
         )
         await ibkr.connect()
         broker = ibkr
@@ -566,8 +567,7 @@ async def build_system(config: AppConfig, secrets: SecretSettings, ledger: Ledge
                 orders=(),
                 positions={position.symbol: position.quantity for position in account.positions},
                 protections={
-                    symbol: protection.quantity
-                    for symbol, protection in broker.protections.items()
+                    symbol: protection.quantity for symbol, protection in broker.protections.items()
                 },
                 events=(),
             ),

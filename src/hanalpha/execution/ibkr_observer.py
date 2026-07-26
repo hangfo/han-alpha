@@ -71,6 +71,23 @@ class ObserverRequestBarrier(BaseModel):
     open_order_query: str = "ALL_OPEN_ORDERS"
     execution_query_scope: str = "BROKER_DEFAULT_CURRENT_DAY"
     completed_orders_requested: bool = False
+    completed_orders_api_only: bool | None = None
+    completed_order_date_scope: str = "BROKER_RETAINED_COMPLETED_ORDERS"
+
+
+class ObservationWindow(BaseModel):
+    """Per-session request envelope. It is audit evidence, never scope identity."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    session_id: str
+    account_request_id: int
+    execution_request_id: int
+    position_epoch: str
+    open_orders_epoch: str
+    execution_history_start: datetime
+    execution_history_end: datetime
+    envelope_hash: str
 
 
 class VisibilityScope(BaseModel):
@@ -87,6 +104,12 @@ class VisibilityScope(BaseModel):
     execution_history_end: datetime
     execution_query_scope: str
     open_order_query: str
+    completed_orders_requested: bool = False
+    completed_orders_api_only: bool | None = None
+    manual_completed_orders_visible: bool = False
+    completed_order_date_scope: str = "NOT_REQUESTED"
+    base_currency: str = "USD"
+    observation_window: ObservationWindow | None = None
     scope_hash: str
     scope_complete: bool
 
@@ -114,6 +137,9 @@ class SnapshotCompletenessCertificate(BaseModel):
     account_scope_unambiguous: bool
     queue_drained: bool
     queue_depth: int = Field(ge=0)
+    accepted_facts: int = Field(default=0, ge=0)
+    written_facts: int = Field(default=0, ge=0)
+    dropped_facts: int = Field(default=0, ge=0)
     writer_error: str | None = None
     unmatched_commission_count: int = Field(ge=0)
     executions_missing_commission_count: int = Field(ge=0)
@@ -125,6 +151,9 @@ class SnapshotCompletenessCertificate(BaseModel):
     executions_hash: str
     commissions_hash: str
     protection_hash: str
+    valuation_hash: str = ""
+    normalization_policy_hash: str = ""
+    valuation_fields: dict[str, str] = Field(default_factory=dict)
     semantic_hash: str
     order_snapshot_complete: bool
     position_snapshot_complete: bool
@@ -151,6 +180,152 @@ class IBKRReadModel(BaseModel):
     executions_missing_commission_exec_ids: tuple[str, ...]
     corrected_execution_roots: tuple[str, ...]
     reducer_conflicts: tuple[str, ...]
+
+
+class CanonicalBrokerStateBuilder:
+    """Build comparable broker economic state without transport/session metadata."""
+
+    CASH_TAGS: ClassVar[frozenset[str]] = frozenset(
+        {"TotalCashValue", "SettledCash", "AccruedCash"}
+    )
+    VALUATION_TAGS: ClassVar[frozenset[str]] = frozenset({"NetLiquidation", "BuyingPower"})
+    TRANSIENT_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "request_id",
+            "session_id",
+            "epoch",
+            "received_at",
+            "callback_received_at",
+            "_received_at",
+        }
+    )
+    POLICY_VERSION: ClassVar[str] = "m7b1-canonical-broker-state-v1"
+
+    @classmethod
+    def build(cls, model: IBKRReadModel | None, *, configured_account_hash: str) -> dict[str, Any]:
+        if model is None:
+            empty: dict[str, Any] = {}
+            return {
+                "account": empty,
+                "valuation": empty,
+                "orders": empty,
+                "positions": empty,
+                "executions": empty,
+                "commissions": empty,
+                "protection": empty,
+            }
+        account: dict[str, dict[str, Any]] = {}
+        valuation: dict[str, dict[str, Any]] = {}
+        for payload in model.account_values.values():
+            if payload.get("account_hash") != configured_account_hash:
+                continue
+            normalized = cls._payload(payload)
+            tag = str(normalized.get("tag", ""))
+            key = ":".join(
+                (
+                    str(normalized.get("account_hash", "")),
+                    tag,
+                    str(normalized.get("currency", "")),
+                )
+            )
+            if tag in cls.CASH_TAGS:
+                account[key] = normalized
+            elif tag in cls.VALUATION_TAGS:
+                valuation[key] = normalized
+        orders: dict[str, dict[str, Any]] = {}
+        for payload in model.orders.values():
+            normalized = cls._payload(payload)
+            orders[cls._order_key(normalized)] = normalized
+        positions = {
+            cls._position_key(normalized): normalized
+            for payload in model.positions.values()
+            if (normalized := cls._payload(payload))
+        }
+        executions = {
+            str(normalized.get("exec_id", key)): normalized
+            for key, payload in model.effective_executions.items()
+            if (normalized := cls._payload(payload))
+        }
+        commissions = {
+            str(normalized.get("exec_id", key)): normalized
+            for key, payload in model.effective_commissions.items()
+            if (normalized := cls._payload(payload))
+        }
+        protection = {
+            key: value for key, value in orders.items() if int(value.get("parent_id", 0) or 0) != 0
+        }
+        return {
+            "account": account,
+            "valuation": valuation,
+            "orders": orders,
+            "positions": positions,
+            "executions": executions,
+            "commissions": commissions,
+            "protection": protection,
+        }
+
+    @classmethod
+    def policy_hash(cls) -> str:
+        return canonical_hash(
+            {
+                "version": cls.POLICY_VERSION,
+                "cash_tags": sorted(cls.CASH_TAGS),
+                "valuation_tags": sorted(cls.VALUATION_TAGS),
+                "transient_fields": sorted(cls.TRANSIENT_FIELDS),
+                "exact_components": [
+                    "account",
+                    "orders",
+                    "positions",
+                    "executions",
+                    "commissions",
+                    "protection",
+                ],
+                "tolerant_components": ["valuation"],
+            }
+        )
+
+    @classmethod
+    def _payload(cls, payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            str(key): cls._clean(value)
+            for key, value in payload.items()
+            if str(key) not in cls.TRANSIENT_FIELDS and not str(key).startswith("_")
+        }
+
+    @classmethod
+    def _clean(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                str(key): cls._clean(item)
+                for key, item in value.items()
+                if str(key) not in cls.TRANSIENT_FIELDS and not str(key).startswith("_")
+            }
+        if isinstance(value, list | tuple):
+            return [cls._clean(item) for item in value]
+        return value
+
+    @staticmethod
+    def _order_key(payload: dict[str, Any]) -> str:
+        perm_id = int(payload.get("perm_id", 0) or 0)
+        order_ref = str(payload.get("order_ref", "") or "")
+        if perm_id:
+            return f"perm:{perm_id}"
+        if order_ref:
+            return f"ref:{order_ref}"
+        return (
+            f"client:{int(payload.get('client_id', 0) or 0)}:"
+            f"order:{int(payload.get('order_id', 0) or 0)}"
+        )
+
+    @staticmethod
+    def _position_key(payload: dict[str, Any]) -> str:
+        return ":".join(
+            (
+                str(payload.get("account_hash", "")),
+                str(payload.get("con_id", "")),
+                str(payload.get("symbol", "")),
+            )
+        )
 
 
 class FactSink(Protocol):
@@ -186,9 +361,7 @@ class IBKRFactStore:
             """
         )
 
-    def start_session(
-        self, *, host: str, port: int, client_id: int, at: datetime
-    ) -> str:
+    def start_session(self, *, host: str, port: int, client_id: int, at: datetime) -> str:
         session_id = canonical_hash(
             {"host": host, "port": port, "client_id": client_id, "started_at": at}
         )
@@ -488,6 +661,9 @@ class IBKRCallbackCollector:
         at: datetime,
         queue_drained: bool,
         queue_depth: int = 0,
+        accepted_facts: int = 0,
+        written_facts: int = 0,
+        dropped_facts: int = 0,
         writer_error: str | None = None,
         final_watermark: int = 0,
     ) -> SnapshotCompletenessCertificate:
@@ -529,9 +705,7 @@ class IBKRCallbackCollector:
             and fact.payload.get("epoch") == barrier.open_orders_epoch
             for fact in facts
         )
-        completed_end = any(
-            fact.fact_type == IBKRFactType.COMPLETED_ORDER_END for fact in facts
-        )
+        completed_end = any(fact.fact_type == IBKRFactType.COMPLETED_ORDER_END for fact in facts)
         account_facts = [
             fact
             for fact in facts
@@ -543,35 +717,75 @@ class IBKRCallbackCollector:
         tags = {str(fact.payload.get("tag")) for fact in account_facts}
         currencies = {str(fact.payload.get("currency")) for fact in account_facts}
         managed = [fact for fact in facts if fact.fact_type == IBKRFactType.MANAGED_ACCOUNTS]
-        managed_count = max((int(fact.payload.get("account_count", 0)) for fact in managed), default=0)
+        managed_count = max(
+            (int(fact.payload.get("account_count", 0)) for fact in managed), default=0
+        )
         configured_seen = any(
             self.configured_account_hash in tuple(fact.payload.get("account_hashes", ()))
             for fact in managed
         )
-        request_ids_match = bool(barrier and account_end and execution_end and position_end and open_end)
+        request_ids_match = bool(
+            barrier and account_end and execution_end and position_end and open_end
+        )
         required_tags = tags >= self._REQUIRED_TAGS
         base_currency_seen = self.base_currency in currencies
         unmatched = len(model.unmatched_commission_exec_ids) if model else 0
         missing_commission = len(model.executions_missing_commission_exec_ids) if model else 0
+        observation_body = {
+            "session_id": self.session_id,
+            "account_request_id": barrier.account_request_id if barrier else -1,
+            "execution_request_id": barrier.execution_request_id if barrier else -1,
+            "position_epoch": barrier.position_epoch if barrier else "UNDECLARED",
+            "open_orders_epoch": barrier.open_orders_epoch if barrier else "UNDECLARED",
+            "execution_history_start": barrier.execution_history_start if barrier else at,
+            "execution_history_end": barrier.execution_history_end if barrier else at,
+        }
+        observation_window = ObservationWindow.model_validate(
+            {
+                **observation_body,
+                "envelope_hash": canonical_hash(observation_body),
+            }
+        )
         scope_body = {
             "configured_account_hash": self.configured_account_hash,
-            "managed_accounts_count": managed_count,
-            "configured_account_seen": configured_seen,
             "client_id": self.client_id,
             "master_client": self.master_client,
             "manual_tws_orders_visible": self.client_id == 0 or self.master_client,
             "other_api_clients_visible": self.master_client,
-            "execution_history_start": barrier.execution_history_start if barrier else at,
-            "execution_history_end": barrier.execution_history_end if barrier else at,
-            "execution_query_scope": (
-                barrier.execution_query_scope if barrier else "UNDECLARED"
-            ),
+            "execution_query_scope": (barrier.execution_query_scope if barrier else "UNDECLARED"),
             "open_order_query": barrier.open_order_query if barrier else "UNDECLARED",
+            "completed_orders_requested": (
+                barrier.completed_orders_requested if barrier else False
+            ),
+            "completed_orders_api_only": (barrier.completed_orders_api_only if barrier else None),
+            "completed_order_date_scope": (
+                barrier.completed_order_date_scope if barrier else "NOT_REQUESTED"
+            ),
+            "base_currency": self.base_currency,
         }
         scope_complete = configured_seen and managed_count == 1 and barrier is not None
         visibility = VisibilityScope.model_validate(
             {
-                **scope_body,
+                "configured_account_hash": self.configured_account_hash,
+                "managed_accounts_count": managed_count,
+                "configured_account_seen": configured_seen,
+                "client_id": self.client_id,
+                "master_client": self.master_client,
+                "manual_tws_orders_visible": self.client_id == 0 or self.master_client,
+                "other_api_clients_visible": self.master_client,
+                "execution_history_start": observation_window.execution_history_start,
+                "execution_history_end": observation_window.execution_history_end,
+                "execution_query_scope": scope_body["execution_query_scope"],
+                "open_order_query": scope_body["open_order_query"],
+                "completed_orders_requested": scope_body["completed_orders_requested"],
+                "completed_orders_api_only": scope_body["completed_orders_api_only"],
+                "manual_completed_orders_visible": (
+                    bool(scope_body["completed_orders_requested"])
+                    and scope_body["completed_orders_api_only"] is False
+                ),
+                "completed_order_date_scope": scope_body["completed_order_date_scope"],
+                "base_currency": self.base_currency,
+                "observation_window": observation_window,
                 "scope_hash": canonical_hash(scope_body),
                 "scope_complete": scope_complete,
             }
@@ -595,49 +809,45 @@ class IBKRCallbackCollector:
             "visibility_scope_hash": visibility.scope_hash,
             "base_currency": self.base_currency,
         }
-        account_values = (
-            {
-                key: value
-                for key, value in self._semantic_payload(model.account_values).items()
-                if value.get("account_hash") == self.configured_account_hash
-            }
-            if model
-            else {}
+        canonical = CanonicalBrokerStateBuilder.build(
+            model, configured_account_hash=self.configured_account_hash
         )
-        orders = self._semantic_payload(model.orders) if model else {}
-        positions = self._semantic_payload(model.positions) if model else {}
-        executions = self._semantic_payload(model.effective_executions) if model else {}
-        commissions = self._semantic_payload(model.effective_commissions) if model else {}
-        protection = {
-            key: value
-            for key, value in orders.items()
-            if int(value.get("parent_id", 0) or 0) != 0
-        }
         component_hashes = {
-            "account_hash": canonical_hash(account_values),
-            "orders_hash": canonical_hash(orders),
-            "positions_hash": canonical_hash(positions),
-            "executions_hash": canonical_hash(executions),
-            "commissions_hash": canonical_hash(commissions),
-            "protection_hash": canonical_hash(protection),
+            "account_hash": canonical_hash(canonical["account"]),
+            "orders_hash": canonical_hash(canonical["orders"]),
+            "positions_hash": canonical_hash(canonical["positions"]),
+            "executions_hash": canonical_hash(canonical["executions"]),
+            "commissions_hash": canonical_hash(canonical["commissions"]),
+            "protection_hash": canonical_hash(canonical["protection"]),
         }
+        valuation_fields = {
+            key: str(value.get("value", "")) for key, value in canonical["valuation"].items()
+        }
+        valuation_hash = canonical_hash(canonical["valuation"])
+        normalization_policy_hash = CanonicalBrokerStateBuilder.policy_hash()
         semantic.update(component_hashes)
-        order_complete = (
-            flags["open_order_end_seen"]
-            and flags["completed_order_end_seen"]
+        semantic["normalization_policy_hash"] = normalization_policy_hash
+        fact_delivery_complete = (
+            dropped_facts == 0
+            and accepted_facts == written_facts
+            and queue_depth == 0
             and queue_drained
             and writer_error is None
         )
-        position_complete = flags["position_end_seen"] and queue_drained and writer_error is None
-        execution_complete = flags["execution_end_seen"] and queue_drained and writer_error is None
+        order_complete = (
+            flags["open_order_end_seen"]
+            and flags["completed_order_end_seen"]
+            and fact_delivery_complete
+        )
+        position_complete = flags["position_end_seen"] and fact_delivery_complete
+        execution_complete = flags["execution_end_seen"] and fact_delivery_complete
         cash_complete = (
             flags["account_end_seen"]
             and required_tags
             and base_currency_seen
             and missing_commission == 0
             and unmatched == 0
-            and queue_drained
-            and writer_error is None
+            and fact_delivery_complete
         )
         complete = (
             all(flags.values())
@@ -646,9 +856,7 @@ class IBKRCallbackCollector:
             and required_tags
             and base_currency_seen
             and scope_complete
-            and queue_drained
-            and queue_depth == 0
-            and writer_error is None
+            and fact_delivery_complete
             and not errors
             and not disconnected
         )
@@ -664,12 +872,18 @@ class IBKRCallbackCollector:
             "account_scope_unambiguous": scope_complete,
             "queue_drained": queue_drained,
             "queue_depth": queue_depth,
+            "accepted_facts": accepted_facts,
+            "written_facts": written_facts,
+            "dropped_facts": dropped_facts,
             "writer_error": writer_error,
             "unmatched_commission_count": unmatched,
             "executions_missing_commission_count": missing_commission,
             "final_watermark": final_watermark,
             "visibility": visibility,
             **component_hashes,
+            "valuation_hash": valuation_hash,
+            "normalization_policy_hash": normalization_policy_hash,
+            "valuation_fields": valuation_fields,
             "semantic_hash": canonical_hash(semantic),
             "order_snapshot_complete": order_complete,
             "position_snapshot_complete": position_complete,
@@ -772,9 +986,7 @@ class IBKRFactReducer:
             effective_executions[root] = executions[effective_id]
             if effective_id in commissions:
                 effective_commissions[root] = commissions[effective_id]
-        effective_ids = {
-            str(payload["exec_id"]) for payload in effective_executions.values()
-        }
+        effective_ids = {str(payload["exec_id"]) for payload in effective_executions.values()}
         return IBKRReadModel(
             session_id=facts[0].session_id,
             orders=orders,
@@ -786,9 +998,7 @@ class IBKRFactReducer:
             positions=positions,
             account_values=accounts,
             unmatched_commission_exec_ids=tuple(sorted(set(commissions) - set(executions))),
-            executions_missing_commission_exec_ids=tuple(
-                sorted(effective_ids - set(commissions))
-            ),
+            executions_missing_commission_exec_ids=tuple(sorted(effective_ids - set(commissions))),
             corrected_execution_roots=tuple(
                 sorted(root for root, versions in corrections.items() if len(versions) > 1)
             ),
@@ -807,7 +1017,9 @@ class IBKRFactReducer:
         incoming_status = str(incoming.get("status", ""))
         if cls._STATUS_RANK.get(current_status, 0) > cls._STATUS_RANK.get(incoming_status, 0):
             merged["status"] = current_status
-        merged["filled"] = str(max(cls._decimal(current.get("filled")), cls._decimal(incoming.get("filled"))))
+        merged["filled"] = str(
+            max(cls._decimal(current.get("filled")), cls._decimal(incoming.get("filled")))
+        )
         remaining_values = [
             cls._decimal(value)
             for value in (current.get("remaining"), incoming.get("remaining"))

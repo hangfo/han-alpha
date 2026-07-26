@@ -11,11 +11,12 @@ test("renders a source-backed safety overview", async () => {
     execution: { status_counts: { APPROVAL_PENDING: 2 }, pending_approvals: 2, pending_cancels: 0, reserved_notional: "1000" },
     reconciliation: { status: "BLOCKED", started_at: null, age_seconds: null, unresolved_discrepancies: 1, authority_snapshot_as_of: null, authority_age_seconds: null, visibility_scope_hash: null },
     observer: { available: false, status: "NO_LOCAL_FACT_TAPE" },
-    freshness: { api_age_seconds: 0, authority_age_seconds: null, observer_fact_age_seconds: null, quote_age_seconds: null, reconciliation_age_seconds: null },
-    readiness: { service: { ready: true, checks: { api: true } }, observer: { ready: false, checks: { certificate: false } }, authority: { ready: false, checks: { fresh: false } }, shadow: { ready: false, checks: { market: false } }, paper_canary: { ready: false, checks: { authority: false } } },
+    freshness: { api_age_seconds: 0, authority_age_seconds: null, observer_fact_age_seconds: null, quote_age_seconds: null, quote_provider_age_seconds: null, reconciliation_age_seconds: null },
+    readiness: { service: { ready: true, checks: { api: true } }, observer: { ready: false, checks: { certificate: false } }, authority: { ready: false, checks: { fresh: false } }, shadow: { ready: false, checks: { market: false } }, runtime_control: { ready: false, checks: { broker: false } }, paper_canary: { ready: false, checks: { authority: false } } },
     authority_timeline: [], discrepancies: [], heartbeats: [],
     backup: { status: "NO_RECORDED_BACKUP", age_seconds: null },
-    burn_in: { independent_sessions: 0, target_sessions: 30, process_restarts: 0, target_process_restarts: 3, tws_restarts: 0, target_tws_restarts: 2, nightly_resets: 0, target_nightly_resets: 1, golden_tapes: 0, target_golden_tapes: 10 },
+    burn_in: { completed_observation_sessions: 0, stable_consensus_votes: 0, consecutive_stable_sessions: 0, divergent_resets: 0, non_independent_rejections: 0, target_sessions: 30, process_restarts: 0, target_process_restarts: 3, tws_restarts: 0, target_tws_restarts: 2, nightly_resets: 0, target_nightly_resets: 1, golden_tapes: 0, target_golden_tapes: 10 },
+    paper_canary_safety_case: { available: false, status: "NOT_ISSUED", created_at: null },
     reality_gap: { samples: 0, no_trade_outcomes: 3 },
     source_notes: { control: "durable SQLite projection" }
   }) }));

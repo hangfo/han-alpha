@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -107,7 +109,14 @@ def _record_authority(store: DurableExecutionStore, *, discriminator: str = "aut
     return str(snapshot.completeness_certificate_id)
 
 
-def _record_quote(store: DurableExecutionStore, *, at: datetime = NOW) -> str:
+def _record_quote(
+    store: DurableExecutionStore,
+    *,
+    at: datetime = NOW,
+    provider: str = "fixture",
+    venue: str = "SMART",
+    currency: str = "USD",
+) -> str:
     return store.record_quote_snapshot(
         symbol="inst-alpha",
         bid=Decimal("100.01"),
@@ -115,9 +124,11 @@ def _record_quote(store: DurableExecutionStore, *, at: datetime = NOW) -> str:
         last=Decimal("100.015"),
         observed_at=at,
         provider_timestamp=at,
-        provider="fixture",
+        provider=provider,
         feed_mode="REALTIME",
         market_phase="REGULAR",
+        venue=venue,
+        currency=currency,
         recorded_at=at,
     ).quote_snapshot_id
 
@@ -160,7 +171,9 @@ def test_manual_approval_and_outbox_survive_restart_exactly_once(tmp_path) -> No
             reopened.connection.execute("SELECT COUNT(*) FROM operator_approvals").fetchone()[0]
             == 1
         )
-        assert reopened.connection.execute("SELECT COUNT(*) FROM outbox_commands").fetchone()[0] == 0
+        assert (
+            reopened.connection.execute("SELECT COUNT(*) FROM outbox_commands").fetchone()[0] == 0
+        )
         authority_id = _record_authority(reopened)
         quote_snapshot_id = _record_quote(reopened)
         arm_id = reopened.arm_approved_intent(
@@ -168,11 +181,14 @@ def test_manual_approval_and_outbox_survive_restart_exactly_once(tmp_path) -> No
             authority_id=authority_id,
             quote_snapshot_id=quote_snapshot_id,
             max_drift_bps=Decimal("5"),
+            armed_by="operator-1",
             at=NOW,
             expires_at=NOW + timedelta(seconds=5),
         )
         assert len(arm_id) == 64
-        assert reopened.connection.execute("SELECT COUNT(*) FROM outbox_commands").fetchone()[0] == 1
+        assert (
+            reopened.connection.execute("SELECT COUNT(*) FROM outbox_commands").fetchone()[0] == 1
+        )
         with pytest.raises(ExecutionInvariantError, match="different approval"):
             reopened.approve(intent.intent_id, actor_id="operator-2", at=NOW)
     finally:
@@ -217,8 +233,14 @@ def test_cancel_before_submission_is_local_durable_and_releases_risk(tmp_path) -
         command_id = store.request_cancel(intent.intent_id, actor_id="operator", at=NOW)
         assert store.request_cancel(intent.intent_id, actor_id="operator", at=NOW) == command_id
         assert store.intent(intent.intent_id)["status"] == ExecutionStatus.CANCELLED
-        assert store.connection.execute("SELECT status FROM outbox_commands").fetchone()[0] == "DELIVERED"
-        assert store.connection.execute("SELECT status FROM cancel_commands").fetchone()[0] == "DELIVERED"
+        assert (
+            store.connection.execute("SELECT status FROM outbox_commands").fetchone()[0]
+            == "DELIVERED"
+        )
+        assert (
+            store.connection.execute("SELECT status FROM cancel_commands").fetchone()[0]
+            == "DELIVERED"
+        )
         assert store.active_reserved_notional("paper-account") == Decimal("0")
     finally:
         store.close()
@@ -230,7 +252,10 @@ def test_authoritative_reconciliation_requires_semantic_consensus(tmp_path) -> N
     try:
         raw = broker.snapshot(at=NOW)
         incomplete = raw.model_copy(update={"complete": False})
-        assert Reconciler(store).reconcile_authoritative(incomplete, at=NOW).status == "INCOMPLETE_SNAPSHOT"
+        assert (
+            Reconciler(store).reconcile_authoritative(incomplete, at=NOW).status
+            == "INCOMPLETE_SNAPSHOT"
+        )
 
         snapshot = raw.model_copy(
             update={
@@ -245,9 +270,7 @@ def test_authoritative_reconciliation_requires_semantic_consensus(tmp_path) -> N
         first = Reconciler(store).reconcile_authoritative(snapshot, at=NOW)
         assert first.status == "AWAITING_CONSENSUS"
         assert first.frozen
-        replay = Reconciler(store).reconcile_authoritative(
-            snapshot, at=NOW + timedelta(seconds=2)
-        )
+        replay = Reconciler(store).reconcile_authoritative(snapshot, at=NOW + timedelta(seconds=2))
         assert replay.status == "AWAITING_CONSENSUS"
         independent = snapshot.model_copy(
             update={
@@ -325,9 +348,7 @@ def test_converged_reconciliation_cannot_promote_incomplete_cash_authority(tmp_p
                 "final_watermark": 20,
             }
         )
-        report = Reconciler(store).reconcile_authoritative(
-            second, at=NOW + timedelta(seconds=2)
-        )
+        report = Reconciler(store).reconcile_authoritative(second, at=NOW + timedelta(seconds=2))
         assert report.status == "AUTHORITY_REJECTED"
         assert store.latest_broker_snapshot_authority() is None
         assert "BROKER_AUTHORITY_COMPONENTS_INCOMPLETE" in store.active_freeze_reasons()
@@ -352,6 +373,7 @@ def test_arm_requires_persisted_fresh_quote_and_fresh_authority(tmp_path) -> Non
                 authority_id=authority_id,
                 quote_snapshot_id=canonical_hash({"quote": "not-yet-loaded"}),
                 max_drift_bps=Decimal("5"),
+                armed_by="operator",
                 at=NOW,
                 expires_at=NOW + timedelta(seconds=6),
             )
@@ -361,6 +383,7 @@ def test_arm_requires_persisted_fresh_quote_and_fresh_authority(tmp_path) -> Non
                 authority_id=authority_id,
                 quote_snapshot_id=canonical_hash({"quote": "not-yet-loaded"}),
                 max_drift_bps=Decimal("11"),
+                armed_by="operator",
                 at=NOW,
                 expires_at=NOW + timedelta(seconds=5),
             )
@@ -370,6 +393,7 @@ def test_arm_requires_persisted_fresh_quote_and_fresh_authority(tmp_path) -> Non
                 authority_id=authority_id,
                 quote_snapshot_id=canonical_hash({"caller": "self-reported"}),
                 max_drift_bps=Decimal("5"),
+                armed_by="operator",
                 at=NOW,
                 expires_at=NOW + timedelta(seconds=5),
             )
@@ -380,10 +404,271 @@ def test_arm_requires_persisted_fresh_quote_and_fresh_authority(tmp_path) -> Non
                 authority_id=authority_id,
                 quote_snapshot_id=stale_quote,
                 max_drift_bps=Decimal("5"),
+                armed_by="operator",
                 at=NOW,
                 expires_at=NOW + timedelta(seconds=5),
             )
         assert "MARKET_QUOTE_STALE" in store.active_freeze_reasons()
+    finally:
+        store.close()
+
+
+def test_expired_arm_can_be_superseded_and_consumed_once(tmp_path) -> None:
+    store = DurableExecutionStore(tmp_path / "control.sqlite3")
+    capsule, reservation, intent = _contracts(discriminator="re-arm", approval_required=True)
+    try:
+        _allow_fixture_staging(store)
+        store.stage(capsule, reservation, intent)
+        store.approve(intent.intent_id, actor_id="approver", at=NOW)
+        authority_id = _record_authority(store, discriminator="re-arm")
+        first_quote = _record_quote(store)
+        first_arm = store.arm_approved_intent(
+            intent.intent_id,
+            authority_id=authority_id,
+            quote_snapshot_id=first_quote,
+            max_drift_bps=Decimal("5"),
+            armed_by="operator-a",
+            at=NOW,
+            expires_at=NOW + timedelta(seconds=1),
+            operator_session_id="session-a",
+        )
+        lease = store.acquire_lease(
+            "broker-writer",
+            owner_id="worker",
+            at=NOW + timedelta(seconds=2),
+            ttl=timedelta(minutes=1),
+        )
+        with pytest.raises(ExecutionInvariantError, match="arm missing or expired"):
+            store.claim_next(lease, at=NOW + timedelta(seconds=2))
+        first = store.connection.execute(
+            "SELECT status FROM approval_arms WHERE arm_id=?", (first_arm,)
+        ).fetchone()
+        assert first["status"] == "EXPIRED"
+
+        second_at = NOW + timedelta(seconds=2)
+        second_quote = _record_quote(store, at=second_at)
+        second_arm = store.arm_approved_intent(
+            intent.intent_id,
+            authority_id=authority_id,
+            quote_snapshot_id=second_quote,
+            max_drift_bps=Decimal("5"),
+            armed_by="operator-b",
+            at=second_at,
+            expires_at=second_at + timedelta(seconds=5),
+            operator_session_id="session-b",
+        )
+        assert second_arm != first_arm
+        claimed = store.claim_next(lease, at=second_at)
+        assert claimed is not None
+        rows = store.connection.execute(
+            """SELECT version, status, armed_by, operator_session_id
+               FROM approval_arms WHERE intent_id=? ORDER BY version""",
+            (intent.intent_id,),
+        ).fetchall()
+        assert [tuple(row) for row in rows] == [
+            (1, "EXPIRED", "operator-a", "session-a"),
+            (2, "CONSUMED", "operator-b", "session-b"),
+        ]
+    finally:
+        store.close()
+
+
+def test_active_arm_is_idempotent_then_superseded_by_new_quote(tmp_path) -> None:
+    store = DurableExecutionStore(tmp_path / "control.sqlite3")
+    capsule, reservation, intent = _contracts(discriminator="active-re-arm", approval_required=True)
+    try:
+        _allow_fixture_staging(store)
+        store.stage(capsule, reservation, intent)
+        store.approve(intent.intent_id, actor_id="approver", at=NOW)
+        authority_id = _record_authority(store, discriminator="active-re-arm")
+        first_quote = _record_quote(store)
+        arguments = {
+            "authority_id": authority_id,
+            "quote_snapshot_id": first_quote,
+            "max_drift_bps": Decimal("5"),
+            "armed_by": "operator",
+            "at": NOW,
+            "expires_at": NOW + timedelta(seconds=5),
+            "operator_session_id": "operator-session",
+        }
+        first_arm = store.arm_approved_intent(intent.intent_id, **arguments)
+        assert store.arm_approved_intent(intent.intent_id, **arguments) == first_arm
+        second_quote = _record_quote(store, provider="fixture-secondary")
+        second_arm = store.arm_approved_intent(
+            intent.intent_id,
+            **{**arguments, "quote_snapshot_id": second_quote},
+        )
+        assert second_arm != first_arm
+        rows = store.connection.execute(
+            "SELECT version, status FROM approval_arms WHERE intent_id=? ORDER BY version",
+            (intent.intent_id,),
+        ).fetchall()
+        assert [tuple(row) for row in rows] == [(1, "SUPERSEDED"), (2, "ACTIVE")]
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    ("venue", "currency", "message"),
+    [
+        ("UNKNOWN", "USD", "venue is not authoritative"),
+        ("SMART", "EUR", "currency does not match"),
+    ],
+)
+def test_arm_rejects_unbound_quote_venue_and_currency(tmp_path, venue, currency, message) -> None:
+    store = DurableExecutionStore(tmp_path / f"{venue}-{currency}.sqlite3")
+    capsule, reservation, intent = _contracts(
+        discriminator=f"{venue}-{currency}", approval_required=True
+    )
+    try:
+        _allow_fixture_staging(store)
+        store.stage(capsule, reservation, intent)
+        store.approve(intent.intent_id, actor_id="approver", at=NOW)
+        authority_id = _record_authority(store, discriminator=f"{venue}-{currency}")
+        quote_id = _record_quote(store, venue=venue, currency=currency)
+        with pytest.raises(ExecutionInvariantError, match=message):
+            store.arm_approved_intent(
+                intent.intent_id,
+                authority_id=authority_id,
+                quote_snapshot_id=quote_id,
+                max_drift_bps=Decimal("5"),
+                armed_by="operator",
+                at=NOW,
+                expires_at=NOW + timedelta(seconds=5),
+            )
+    finally:
+        store.close()
+
+
+def test_legacy_single_arm_schema_migrates_without_losing_receipt(tmp_path) -> None:
+    path = tmp_path / "legacy.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.execute(
+        """CREATE TABLE approval_arms (
+           arm_id TEXT PRIMARY KEY, intent_id TEXT UNIQUE NOT NULL,
+           broker_snapshot_hash TEXT NOT NULL, quote_hash TEXT NOT NULL,
+           approved_limit_price TEXT NOT NULL, max_drift_bps TEXT NOT NULL,
+           armed_at TEXT NOT NULL, expires_at TEXT NOT NULL, arm_json TEXT NOT NULL)"""
+    )
+    connection.execute(
+        "INSERT INTO approval_arms VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "arm-legacy",
+            "intent-legacy",
+            "broker-hash",
+            "quote-hash",
+            "100",
+            "5",
+            NOW.isoformat(),
+            (NOW + timedelta(seconds=5)).isoformat(),
+            "{}",
+        ),
+    )
+    connection.commit()
+    connection.close()
+    store = DurableExecutionStore(path)
+    try:
+        row = store.connection.execute(
+            """SELECT version, status, armed_by, arm_source
+               FROM approval_arms WHERE arm_id='arm-legacy'"""
+        ).fetchone()
+        assert tuple(row) == (1, "ACTIVE", "LEGACY_UNKNOWN", "LEGACY_MIGRATION")
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    ("feed_mode", "provider_offset", "bid", "ask", "message"),
+    [
+        ("DELAYED", 0, "100.01", "100.02", "not realtime"),
+        ("REALTIME", -10, "100.01", "100.02", "provider timestamp exceeded"),
+        ("REALTIME", 2, "100.01", "100.02", "timestamp is in the future"),
+        ("REALTIME", 0, "99", "101", "spread exceeds"),
+    ],
+)
+def test_arm_rejects_adversarial_quote_freshness_and_spread(
+    tmp_path, feed_mode, provider_offset, bid, ask, message
+) -> None:
+    store = DurableExecutionStore(tmp_path / f"{feed_mode}-{provider_offset}-{bid}.sqlite3")
+    capsule, reservation, intent = _contracts(
+        discriminator=f"{feed_mode}-{provider_offset}-{bid}",
+        approval_required=True,
+    )
+    try:
+        _allow_fixture_staging(store)
+        store.stage(capsule, reservation, intent)
+        store.approve(intent.intent_id, actor_id="approver", at=NOW)
+        authority_id = _record_authority(
+            store, discriminator=f"{feed_mode}-{provider_offset}-{bid}"
+        )
+        quote = store.record_quote_snapshot(
+            symbol="inst-alpha",
+            bid=Decimal(bid),
+            ask=Decimal(ask),
+            last=Decimal("100"),
+            observed_at=NOW,
+            provider_timestamp=NOW + timedelta(seconds=provider_offset),
+            provider="fixture",
+            feed_mode=feed_mode,
+            market_phase="REGULAR",
+            venue="SMART",
+            currency="USD",
+            recorded_at=NOW,
+        )
+        with pytest.raises(ExecutionInvariantError, match=message):
+            store.arm_approved_intent(
+                intent.intent_id,
+                authority_id=authority_id,
+                quote_snapshot_id=quote.quote_snapshot_id,
+                max_drift_bps=Decimal("5"),
+                armed_by="operator",
+                at=NOW,
+                expires_at=NOW + timedelta(seconds=5),
+            )
+    finally:
+        store.close()
+
+
+def test_authority_equivalence_allows_bounded_valuation_drift_only(tmp_path) -> None:
+    store = DurableExecutionStore(tmp_path / "control.sqlite3")
+    scope = canonical_hash({"scope": "valuation"})
+    semantic = canonical_hash({"exact": "economic-state"})
+    policy = canonical_hash({"policy": "m7b1"})
+
+    def snapshot(index: int, net_liquidation: str) -> BrokerSnapshot:
+        return BrokerSnapshot(
+            as_of=NOW + timedelta(seconds=index),
+            cash=Decimal("100000"),
+            completeness_certificate_id=canonical_hash({"certificate": index}),
+            observation_id=canonical_hash({"observation": index}),
+            session_id=canonical_hash({"session": index}),
+            final_watermark=10 + index,
+            semantic_hash=semantic,
+            visibility_scope_hash=scope,
+            normalization_policy_hash=policy,
+            valuation_fields={"NetLiquidation:USD": Decimal(net_liquidation)},
+            orders=(),
+            positions={},
+            protections={},
+            events=(),
+        )
+
+    try:
+        assert store.register_snapshot_consensus(
+            snapshot(1, "100000"), at=NOW + timedelta(seconds=1)
+        ) == (False, 1)
+        assert store.register_snapshot_consensus(
+            snapshot(2, "100200"), at=NOW + timedelta(seconds=2)
+        ) == (True, 2)
+        assert store.register_snapshot_consensus(
+            snapshot(3, "101000"), at=NOW + timedelta(seconds=3)
+        ) == (False, 1)
+        proof = store.connection.execute(
+            """SELECT equivalence_json FROM broker_snapshot_votes
+               WHERE observation_id=?""",
+            (canonical_hash({"observation": 3}),),
+        ).fetchone()
+        assert json.loads(proof["equivalence_json"])["state_equivalent"] is False
     finally:
         store.close()
 
@@ -435,9 +720,7 @@ def test_cash_bridge_starts_a_new_projection_baseline_epoch(tmp_path) -> None:
             refreshed, bridge_id=bridge_id, at=NOW + timedelta(seconds=1)
         )
         assert store.expected_account_cash() == Decimal("99500")
-        store.connection.execute(
-            "UPDATE cash_projection SET cash_delta='-1100' WHERE singleton=1"
-        )
+        store.connection.execute("UPDATE cash_projection SET cash_delta='-1100' WHERE singleton=1")
         store.connection.commit()
         assert store.expected_account_fields()["cash"] == Decimal("99400")
         assert store.expected_account_fields()["settled_cash"] is None
@@ -461,7 +744,10 @@ def test_reconciliation_closes_discrepancies_absent_from_later_run(tmp_path) -> 
             BrokerSnapshot(
                 as_of=NOW + timedelta(seconds=1),
                 cash=Decimal("100000"),
-                orders=(), positions={}, protections={}, events=(),
+                orders=(),
+                positions={},
+                protections={},
+                events=(),
             ),
             at=NOW + timedelta(seconds=1),
         )
@@ -472,6 +758,55 @@ def test_reconciliation_closes_discrepancies_absent_from_later_run(tmp_path) -> 
         ).fetchone()
         assert row["lifecycle_status"] == "RESOLVED"
         assert "absent_from_later_reconciliation" in row["resolution_evidence"]
+    finally:
+        store.close()
+
+
+def test_reconciliation_supersedes_changed_details_for_same_entity(tmp_path) -> None:
+    store = DurableExecutionStore(tmp_path / "control.sqlite3")
+    old_id = canonical_hash({"discrepancy": "cash-old-details"})
+    old_run = canonical_hash({"run": "cash-old"})
+    store.connection.execute(
+        """INSERT INTO reconciliation_discrepancies
+           (discrepancy_id, run_id, severity, kind, entity_key, details_json,
+            resolved_at, first_seen_at, last_seen_at, lifecycle_status,
+            resolution_evidence)
+           VALUES (?, ?, 'CRITICAL', 'CASH_MISMATCH', 'USD', '{}', NULL, ?, ?,
+                   'OPEN', NULL)""",
+        (old_id, old_run, NOW.isoformat(), NOW.isoformat()),
+    )
+    store.connection.commit()
+    baseline = BrokerSnapshot(
+        as_of=NOW,
+        cash=Decimal("100000"),
+        settled_cash=Decimal("100000"),
+        buying_power=Decimal("100000"),
+        accrued_cash=Decimal("0"),
+        orders=(),
+        positions={},
+        protections={},
+        events=(),
+    )
+    store.set_account_baseline(baseline)
+    try:
+        report = Reconciler(store).reconcile(
+            baseline.model_copy(
+                update={"as_of": NOW + timedelta(seconds=1), "cash": Decimal("90000")}
+            ),
+            at=NOW + timedelta(seconds=1),
+        )
+        assert report.status == "BLOCKED"
+        rows = store.connection.execute(
+            """SELECT discrepancy_id, lifecycle_status, resolution_evidence
+               FROM reconciliation_discrepancies
+               WHERE kind='CASH_MISMATCH' AND entity_key='USD'
+               ORDER BY first_seen_at"""
+        ).fetchall()
+        assert len(rows) == 2
+        assert rows[0]["discrepancy_id"] == old_id
+        assert rows[0]["lifecycle_status"] == "SUPERSEDED"
+        assert "superseded_by_new_observation" in rows[0]["resolution_evidence"]
+        assert rows[1]["lifecycle_status"] == "OPEN"
     finally:
         store.close()
 
@@ -765,9 +1100,7 @@ def test_new_lease_fences_old_writer_before_new_writer_submits(tmp_path) -> None
         )
         ExecutionWorker(store, broker, second)
         with pytest.raises(StaleFencingToken):
-            broker.submit(
-                intent, fencing_token=first.fencing_token, at=NOW + timedelta(seconds=3)
-            )
+            broker.submit(intent, fencing_token=first.fencing_token, at=NOW + timedelta(seconds=3))
     finally:
         broker.close()
         store.close()

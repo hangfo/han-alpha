@@ -31,6 +31,7 @@ try:
 
     IBAPI_AVAILABLE = True
 except ImportError:  # pragma: no cover - depends on local official TWS API install
+
     class EWrapper:  # type: ignore[no-redef]
         pass
 
@@ -69,7 +70,9 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
         self.connected_event.set()
         self._observe(IBKRFactType.NEXT_VALID_ID, {"order_id": orderId}, key=str(orderId))
 
-    def error(self, reqId: int, errorCode: int, errorString: str, advancedOrderRejectJson: str = "") -> None:
+    def error(
+        self, reqId: int, errorCode: int, errorString: str, advancedOrderRejectJson: str = ""
+    ) -> None:
         self._observe(
             IBKRFactType.ERROR,
             {"request_id": reqId, "code": errorCode, "message": errorString},
@@ -290,11 +293,17 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
         self._observe(IBKRFactType.COMPLETED_ORDER_END, {}, key="completed-orders-end")
 
     def openOrderEnd(self) -> None:
-        epoch = self.observer.barrier.open_orders_epoch if self.observer and self.observer.barrier else ""
+        epoch = (
+            self.observer.barrier.open_orders_epoch
+            if self.observer and self.observer.barrier
+            else ""
+        )
         self._observe(IBKRFactType.OPEN_ORDER_END, {"epoch": epoch}, key=epoch or "end")
 
     def positionEnd(self) -> None:
-        epoch = self.observer.barrier.position_epoch if self.observer and self.observer.barrier else ""
+        epoch = (
+            self.observer.barrier.position_epoch if self.observer and self.observer.barrier else ""
+        )
         self._observe(IBKRFactType.POSITION_END, {"epoch": epoch}, key=epoch or "end")
 
     def execDetailsEnd(self, reqId: int) -> None:
@@ -328,7 +337,15 @@ class IBKRBroker:
     Live use is intentionally gated by higher-level configuration and approval logic.
     """
 
-    def __init__(self, *, host: str, port: int, client_id: int, account: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        host: str,
+        port: int,
+        client_id: int,
+        account: str | None = None,
+        base_currency: str = "USD",
+    ) -> None:
         if not IBAPI_AVAILABLE:
             raise RuntimeError(
                 "Official IBKR TWS API Python package is unavailable. Install it from the "
@@ -338,6 +355,7 @@ class IBKRBroker:
         self.port = port
         self.client_id = client_id
         self.account = account
+        self.base_currency = base_currency
         self.app = _IBApp()
         self.thread: threading.Thread | None = None
         self._idempotency: dict[str, int] = {}
@@ -367,7 +385,9 @@ class IBKRBroker:
         if self.port not in {4002, 7497}:
             raise RuntimeError("read-only observer only permits standard IBKR paper ports")
         if not self.account:
-            raise RuntimeError("read-only observer requires one explicitly configured Paper account")
+            raise RuntimeError(
+                "read-only observer requires one explicitly configured Paper account"
+            )
         started_at = datetime.now(UTC)
         session_id = store.start_session(
             host=self.host,
@@ -384,6 +404,7 @@ class IBKRBroker:
             execution_filter.time = started_at.strftime("%Y%m%d 00:00:00 UTC")
             execution_scope = "FILTER_TIME_FROM_UTC_DAY_START"
         completed_orders_requested = hasattr(self.app, "reqCompletedOrders")
+        completed_orders_api_only = True if completed_orders_requested else None
         barrier = ObserverRequestBarrier(
             account_request_id=request_seed,
             execution_request_id=request_seed + 1,
@@ -393,6 +414,7 @@ class IBKRBroker:
             execution_history_end=started_at,
             execution_query_scope=execution_scope,
             completed_orders_requested=completed_orders_requested,
+            completed_orders_api_only=completed_orders_api_only,
         )
         bridge = IBKRFactBridge(store.path)
         collector = IBKRCallbackCollector(
@@ -400,6 +422,7 @@ class IBKRBroker:
             session_id,
             barrier=barrier,
             configured_account=self.account,
+            base_currency=getattr(self, "base_currency", "USD"),
             client_id=self.client_id,
         )
         self.app.observer = collector
@@ -421,11 +444,7 @@ class IBKRBroker:
             ("EXECUTIONS", barrier.execution_request_id),
             ("POSITIONS", barrier.position_epoch),
             ("OPEN_ORDERS", barrier.open_orders_epoch),
-            *(
-                (("COMPLETED_ORDERS", session_id),)
-                if completed_orders_requested
-                else ()
-            ),
+            *((("COMPLETED_ORDERS", session_id),) if completed_orders_requested else ()),
         ):
             collector.record(
                 IBKRFactType.REQUEST_START,
@@ -454,6 +473,9 @@ class IBKRBroker:
                 at=datetime.now(UTC),
                 queue_drained=drained,
                 queue_depth=bridge.depth,
+                accepted_facts=bridge.accepted,
+                written_facts=bridge.written,
+                dropped_facts=bridge.dropped,
                 writer_error=bridge.writer_error,
                 final_watermark=store.fact_count(),
             )
@@ -484,6 +506,9 @@ class IBKRBroker:
             at=datetime.now(UTC),
             queue_drained=(bridge.depth == 0 and bridge.written == bridge.accepted),
             queue_depth=bridge.depth,
+            accepted_facts=bridge.accepted,
+            written_facts=bridge.written,
+            dropped_facts=bridge.dropped,
             writer_error=bridge.writer_error,
             final_watermark=store.fact_count(),
         )
@@ -499,7 +524,9 @@ class IBKRBroker:
         cash = self.app.account_values.get("TotalCashValue", 0.0)
         buying_power = self.app.account_values.get("BuyingPower", 0.0)
         if net <= 0:
-            net = max(0.01, cash + sum(item.market_value for item in self.app.positions_cache.values()))
+            net = max(
+                0.01, cash + sum(item.market_value for item in self.app.positions_cache.values())
+            )
         return AccountSnapshot(
             timestamp=datetime.now(UTC),
             net_liquidation=net,
@@ -654,9 +681,7 @@ class IBKRBroker:
             self.app.order_events.clear()
         return events
 
-    async def cancel_all(
-        self, capability: BrokerWriteCapability | None
-    ) -> list[OrderEvent]:
+    async def cancel_all(self, capability: BrokerWriteCapability | None) -> list[OrderEvent]:
         require_broker_write(capability)
         self.app.reqGlobalCancel()
         await asyncio.sleep(0.2)

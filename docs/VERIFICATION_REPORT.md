@@ -1,5 +1,36 @@
 # Verification report
 
+## M7-B.1 authority normalization and admission - 2026-07-26
+
+Baseline: `ba85691581a3729dbfdaef97c6a5072f0f138b62`.
+
+Detailed review decisions:
+`docs/v2-plan/16_M7B_REVIEW_AND_M7B1_DECISIONS_ZH.md`.
+
+VERIFIED:
+
+- Observation Window, Scope Policy and Canonical Broker State are separate hashes.
+- Two complete Observer cycles with distinct Session/Request IDs, certificates and watermarks produce one stable policy/state and reach two-vote consensus.
+- Cash/order/position/execution/commission/protection remain exact; bounded NetLiquidation/BuyingPower drift produces an explicit non-causal equivalence proof.
+- Approval Arms are versioned, actor-attributed, replaceable after expiry and consumed atomically with the claimed outbox command; legacy schema migration preserves rows.
+- Quote admission rejects delayed, stale-provider, future-clock, wide-spread, unverified-venue and currency-mismatched evidence.
+- Runtime Control is source-backed; Paper Canary cannot pass without an immutable external safety case and realtime Quote Authority.
+- `./scripts/preflight.sh`: PASS under repository Python 3.12.13 environment.
+- `./scripts/verify_all.sh`: PASS; 205 Python tests, 85.14% branch-aware coverage, Ruff, strict mypy, package/CLI/API/synthetic/backtest smoke, 2 Vitest tests, TypeScript/lint/Vite build and zero high npm vulnerabilities.
+- A copied pre-M7-B.1 local control store migrated successfully and passed `PRAGMA integrity_check`.
+- Chrome QA against an isolated real FastAPI instance: all six readiness layers, provider quote age, complete/stable/reset burn-in counters and the Canary admission reason graph rendered correctly; the DOM contained no buttons or links. All application requests returned 200. Console diagnostics were limited to unrelated installed wallet-extension injection warnings/errors.
+
+BLOCKED:
+
+- Official IBKR API and authenticated Paper TWS/Gateway burn-in.
+- 30 observations, consecutive stability, Golden Tapes, reset, real cancel/bracket, Paper account/session proof and one-use Canary Permit.
+- Real survivor-bias-free PIT data, forward evidence and any profitability claim.
+
+NOT IMPLEMENTED:
+
+- Durable real IBKR writer and Canary Permit issuance, intentionally gated after external zero-write acceptance.
+- Browser mutation controls, intentionally outside the read-only Ops milestone.
+
 ## M7-A authority hardening and M7-B read-only operations - 2026-07-20
 
 VERIFIED locally: non-replayable independent Snapshot voting; account/order/position/execution/commission/protection component hashes; complete-CONVERGED-only Authority promotion; system-generated persisted Quote Capsules and ID-only Arm; Bracket leg identity; Completed Orders facts; explicit execution scope; Broker occurred/received time separation; discrepancy lifecycle; layered readiness and expanded metrics; Authority/freshness/burn-in dashboard; cross-store manifest and atomic Generation Restore with interruption tests.

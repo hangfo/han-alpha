@@ -20,7 +20,12 @@ def test_api_lifecycle_and_controls(monkeypatch, tmp_path: Path) -> None:
         readiness = client.get("/ready")
         assert readiness.status_code == 200
         assert set(readiness.json()["layers"]) == {
-            "service", "observer", "authority", "shadow", "paper_canary"
+            "service",
+            "observer",
+            "authority",
+            "shadow",
+            "runtime_control",
+            "paper_canary",
         }
         assert client.get("/ready/service").status_code == 200
         assert client.get("/ready/observer").status_code == 200

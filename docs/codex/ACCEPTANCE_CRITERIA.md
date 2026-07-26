@@ -72,6 +72,11 @@ reservation-aware账户容量。M6只读事实带与完整性证书也已通过�
 真实IBKR burn-in及完整durable cancel/flatten单写入者路径仍未完成，因此以上
 平台级条目暂不整体勾选。
 
+M7-B.1已把Observation Window、Scope Policy和Canonical Broker State分离，
+用两次完整Observer周期验证跨Session共识，并增加估值容差证明、可重Arm和
+严格Quote准入。完整Paper Canary仍要求外部Safety Case、真实Writer/Cancel/
+Bracket与一次性Permit，因此不得据本地测试勾选真实Paper验收。
+
 ## 8. 工程质量
 
 - [x] Ruff通过。

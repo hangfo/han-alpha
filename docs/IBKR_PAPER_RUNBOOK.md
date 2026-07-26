@@ -18,6 +18,9 @@
 - Start TWS/IB Gateway and authenticate with supported 2FA.
 - Run `hanalpha ibkr-observe --state .state/ibkr-observer.sqlite3 --timeout 15`.
 - Require `complete=true`; a TCP connection without all end markers is incomplete.
+- Require `accepted_facts == written_facts`, `dropped_facts == 0` and no writer error.
+- Track complete observations separately from consecutive stable Authority sessions; a divergent reset is not a stable vote.
+- Test Completed Orders twice: `apiOnly=True` for Han Alpha/API scope, then `apiOnly=False` for manually submitted TWS order visibility.
 - Restart the process and TWS/Gateway, then repeat across a reset boundary.
 - Replay the fact tape and require the same reduced account/order/position/execution state.
 - Check `/health` and `/status`.
@@ -25,8 +28,10 @@
 - Compare positions and open orders.
 - Generate an order plan without submission.
 
-Do not enable Paper submission until durable cancel, bracket recovery, Unknown Submit and prolonged
-reconciliation burn-in are separately accepted. The current M6 state does not meet that gate.
+Do not enable Paper submission until 30 observations, consecutive stability, Golden Tapes,
+nightly reset, realtime Quote/calendar authority, durable writer, real cancel, bracket
+recovery, Paper-account proof and a one-use Canary Permit are separately accepted. The
+current M7-B.1 state does not meet that gate.
 
 ## Daily operation
 

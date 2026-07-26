@@ -52,10 +52,13 @@
 - A single writer holds a fenced lease. Persistent Fake Broker fault scenarios feed a deduplicating Inbox and transactional order/fill/position/cash projections.
 - Startup reconciliation is frozen until Broker truth converges; unknown submits, broker-only orders, mismatched fills/positions and missing protection have explicit recovery/freeze behavior.
 - The IBKR adapter is M6 scope and is not validated by the Fake Broker result. Authenticated emergency cancel/flatten remains a direct risk-reducing compatibility path until M6 adds durable cancel commands.
+- M7-B.1 separates the Observer `ObservationWindow` envelope from stable Visibility Scope policy and canonical economic state. Cash/order/position/execution/commission/protection are exact Authority components; NetLiquidation and BuyingPower are bounded valuation observations with an explicit equivalence receipt.
+- Manual approval is immutable, while actor-attributed Arms are versioned, replaceable and consumed atomically with outbox claim. Quote admission requires realtime provider time, bounded spread, eligible market phase and matching symbol/currency evidence.
 
 ### Control plane
 
 - FastAPI exposes health, status, manual cycle, signals, orders, audit events, freeze, unfreeze, cancel-all, and flatten-all.
+- Read-only Ops separates `runtime_control` from `paper_canary`. Canary cannot pass without the external immutable safety case; the dashboard has no mutation controls.
 - The API is localhost-only by default and has no remote authentication in V1.
 
 ### Audit plane

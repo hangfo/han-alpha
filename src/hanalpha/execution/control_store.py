@@ -60,10 +60,15 @@ class DurableExecutionStore:
               actor_id TEXT NOT NULL, approved_at TEXT NOT NULL, approval_json TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS approval_arms (
-              arm_id TEXT PRIMARY KEY, intent_id TEXT UNIQUE NOT NULL,
+              arm_id TEXT PRIMARY KEY, intent_id TEXT NOT NULL,
+              version INTEGER NOT NULL, status TEXT NOT NULL,
+              authority_id TEXT NOT NULL, quote_snapshot_id TEXT NOT NULL,
               broker_snapshot_hash TEXT NOT NULL, quote_hash TEXT NOT NULL,
               approved_limit_price TEXT NOT NULL, max_drift_bps TEXT NOT NULL,
-              armed_at TEXT NOT NULL, expires_at TEXT NOT NULL, arm_json TEXT NOT NULL
+              armed_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+              armed_by TEXT NOT NULL, arm_source TEXT NOT NULL,
+              operator_session_id TEXT, consumed_at TEXT, arm_json TEXT NOT NULL,
+              UNIQUE(intent_id, version)
             );
             CREATE TABLE IF NOT EXISTS outbox_commands (
               command_id TEXT PRIMARY KEY, intent_id TEXT UNIQUE NOT NULL,
@@ -134,7 +139,8 @@ class DurableExecutionStore:
               session_id TEXT NOT NULL, visibility_scope_hash TEXT NOT NULL,
               semantic_hash TEXT NOT NULL, snapshot_as_of TEXT NOT NULL,
               final_watermark INTEGER NOT NULL, recorded_at TEXT NOT NULL,
-              disposition TEXT NOT NULL
+              disposition TEXT NOT NULL, snapshot_json TEXT,
+              equivalence_json TEXT
             );
             CREATE TABLE IF NOT EXISTS broker_authority_candidates (
               certificate_id TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL,
@@ -179,6 +185,10 @@ class DurableExecutionStore:
               component TEXT PRIMARY KEY, status TEXT NOT NULL,
               observed_at TEXT NOT NULL, details_json TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS paper_canary_safety_cases (
+              safety_case_id TEXT PRIMARY KEY, created_at TEXT NOT NULL,
+              case_json TEXT NOT NULL, status TEXT NOT NULL
+            );
             INSERT OR IGNORE INTO control_state VALUES (1, 1, 'startup_reconciliation_required',
               '1970-01-01T00:00:00+00:00');
             INSERT OR IGNORE INTO freeze_tickets VALUES (
@@ -204,6 +214,51 @@ class DurableExecutionStore:
                 DROP TABLE freeze_tickets_legacy;
                 """
             )
+        arm_columns = {
+            row["name"] for row in self.connection.execute("PRAGMA table_info(approval_arms)")
+        }
+        if "version" not in arm_columns:
+            self.connection.executescript(
+                """
+                DROP INDEX IF EXISTS idx_approval_arms_active_intent;
+                ALTER TABLE approval_arms RENAME TO approval_arms_legacy;
+                CREATE TABLE approval_arms (
+                  arm_id TEXT PRIMARY KEY, intent_id TEXT NOT NULL,
+                  version INTEGER NOT NULL, status TEXT NOT NULL,
+                  authority_id TEXT NOT NULL, quote_snapshot_id TEXT NOT NULL,
+                  broker_snapshot_hash TEXT NOT NULL, quote_hash TEXT NOT NULL,
+                  approved_limit_price TEXT NOT NULL, max_drift_bps TEXT NOT NULL,
+                  armed_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+                  armed_by TEXT NOT NULL, arm_source TEXT NOT NULL,
+                  operator_session_id TEXT, consumed_at TEXT, arm_json TEXT NOT NULL,
+                  UNIQUE(intent_id, version)
+                );
+                INSERT INTO approval_arms
+                  (arm_id, intent_id, version, status, authority_id, quote_snapshot_id,
+                   broker_snapshot_hash, quote_hash, approved_limit_price, max_drift_bps,
+                   armed_at, expires_at, armed_by, arm_source, operator_session_id,
+                   consumed_at, arm_json)
+                SELECT arm_id, intent_id, 1, 'ACTIVE', '', '', broker_snapshot_hash,
+                       quote_hash, approved_limit_price, max_drift_bps, armed_at,
+                       expires_at, 'LEGACY_UNKNOWN', 'LEGACY_MIGRATION', NULL, NULL,
+                       arm_json
+                FROM approval_arms_legacy;
+                DROP TABLE approval_arms_legacy;
+                CREATE UNIQUE INDEX idx_approval_arms_active_intent
+                  ON approval_arms(intent_id) WHERE status='ACTIVE';
+                """
+            )
+        self.connection.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_arms_active_intent
+               ON approval_arms(intent_id) WHERE status='ACTIVE'"""
+        )
+        vote_columns = {
+            row["name"]
+            for row in self.connection.execute("PRAGMA table_info(broker_snapshot_votes)")
+        }
+        for name in ("snapshot_json", "equivalence_json"):
+            if name not in vote_columns:
+                self.connection.execute(f"ALTER TABLE broker_snapshot_votes ADD COLUMN {name} TEXT")
         baseline_columns = {
             row["name"]
             for row in self.connection.execute("PRAGMA table_info(broker_account_baseline)")
@@ -236,9 +291,7 @@ class DurableExecutionStore:
             """SELECT 1 FROM freeze_tickets WHERE reason_code='STARTUP_RECONCILIATION'
                AND source='system' AND resolved_at IS NULL"""
         ).fetchone():
-            self.open_freeze_ticket(
-                "STARTUP_RECONCILIATION", source="system", at=datetime.now(UTC)
-            )
+            self.open_freeze_ticket("STARTUP_RECONCILIATION", source="system", at=datetime.now(UTC))
 
     def close(self) -> None:
         self.connection.close()
@@ -383,9 +436,7 @@ class DurableExecutionStore:
             self.connection.execute("BEGIN IMMEDIATE")
             blocking = self.active_freeze_reasons()
             if blocking:
-                raise ExecutionInvariantError(
-                    "approval is frozen: " + ",".join(blocking)
-                )
+                raise ExecutionInvariantError("approval is frozen: " + ",".join(blocking))
             row = self._intent_row(intent_id)
             if row["status"] not in {
                 ExecutionStatus.APPROVAL_PENDING.value,
@@ -441,10 +492,15 @@ class DurableExecutionStore:
         authority_id: str,
         quote_snapshot_id: str,
         max_drift_bps: Decimal,
+        armed_by: str,
         at: datetime,
         expires_at: datetime,
+        arm_source: str = "OPERATOR",
+        operator_session_id: str | None = None,
         authority_max_age: timedelta = timedelta(seconds=30),
         quote_max_age: timedelta = timedelta(seconds=5),
+        provider_clock_skew: timedelta = timedelta(seconds=1),
+        max_spread_bps: Decimal = Decimal("50"),
     ) -> str:
         """Bind approval to fresh broker/quote truth before creating the submit outbox."""
         try:
@@ -507,16 +563,41 @@ class DurableExecutionStore:
                 )
                 self.connection.commit()
                 raise ExecutionInvariantError("quote snapshot exceeded maximum age")
+            provider_age = at - quote.provider_timestamp
+            if provider_age < -provider_clock_skew:
+                raise ExecutionInvariantError("quote provider timestamp is in the future")
+            if provider_age > quote_max_age:
+                raise ExecutionInvariantError("quote provider timestamp exceeded maximum age")
+            if quote.provider_timestamp > quote.observed_at + provider_clock_skew:
+                raise ExecutionInvariantError(
+                    "quote provider timestamp exceeds observation clock tolerance"
+                )
+            if quote.feed_mode != "REALTIME":
+                raise ExecutionInvariantError("quote feed is not realtime")
             intent = ExecutionIntent.model_validate_json(row["intent_json"])
             if quote.symbol != intent.instrument_id:
                 raise ExecutionInvariantError("quote symbol does not match intent")
+            if quote.venue == "UNKNOWN":
+                raise ExecutionInvariantError("quote venue is not authoritative")
+            if quote.currency != snapshot.base_currency:
+                raise ExecutionInvariantError("quote currency does not match broker authority")
             if quote.market_phase not in {"REGULAR", "OPEN"}:
                 raise ExecutionInvariantError("quote market phase is not eligible for arming")
+            midpoint = (quote.bid + quote.ask) / Decimal("2")
+            spread_bps = (quote.ask - quote.bid) / midpoint * Decimal("10000")
+            if spread_bps > max_spread_bps:
+                raise ExecutionInvariantError("quote spread exceeds system policy")
             current_limit_price = quote.ask if intent.side.value == "BUY" else quote.bid
             drift_bps = abs(current_limit_price - intent.limit_price) / intent.limit_price * 10_000
             if drift_bps > max_drift_bps:
                 raise ExecutionInvariantError("quote drift exceeds approval arm limit")
-            document = {
+            active = self.connection.execute(
+                """SELECT * FROM approval_arms
+                   WHERE intent_id=? AND status='ACTIVE'
+                   ORDER BY version DESC LIMIT 1""",
+                (intent_id,),
+            ).fetchone()
+            binding = {
                 "intent_id": intent_id,
                 "authority_id": authority_id,
                 "broker_snapshot_hash": authority["semantic_hash"],
@@ -527,25 +608,56 @@ class DurableExecutionStore:
                 "armed_at": at.isoformat(),
                 "expires_at": expires_at.isoformat(),
                 "intent_spec_hash": canonical_hash(intent),
+                "armed_by": armed_by,
+                "arm_source": arm_source,
+                "operator_session_id": operator_session_id,
+                "provider_age_seconds": provider_age.total_seconds(),
+                "spread_bps": str(spread_bps),
             }
+            if active is not None:
+                existing_document = json.loads(active["arm_json"])
+                if all(existing_document.get(key) == value for key, value in binding.items()):
+                    self.connection.commit()
+                    return str(active["arm_id"])
+                replacement_status = (
+                    "EXPIRED"
+                    if datetime.fromisoformat(active["expires_at"]) <= at
+                    else "SUPERSEDED"
+                )
+                self.connection.execute(
+                    "UPDATE approval_arms SET status=? WHERE arm_id=?",
+                    (replacement_status, active["arm_id"]),
+                )
+            previous_version = self.connection.execute(
+                "SELECT COALESCE(MAX(version), 0) FROM approval_arms WHERE intent_id=?",
+                (intent_id,),
+            ).fetchone()[0]
+            version = int(previous_version) + 1
+            document = {**binding, "version": version, "status": "ACTIVE"}
             arm_id = canonical_hash(document)
             serialized = json.dumps(document, sort_keys=True, separators=(",", ":"))
-            existing = self.connection.execute(
-                "SELECT arm_json FROM approval_arms WHERE intent_id=?", (intent_id,)
-            ).fetchone()
-            if existing is not None and existing["arm_json"] != serialized:
-                raise ExecutionInvariantError("intent already has a different approval arm")
             self.connection.execute(
-                "INSERT OR IGNORE INTO approval_arms VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                """INSERT INTO approval_arms
+                   (arm_id, intent_id, version, status, authority_id, quote_snapshot_id,
+                    broker_snapshot_hash, quote_hash, approved_limit_price, max_drift_bps,
+                    armed_at, expires_at, armed_by, arm_source, operator_session_id,
+                    consumed_at, arm_json)
+                   VALUES (?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)""",
                 (
                     arm_id,
                     intent_id,
+                    version,
+                    authority_id,
+                    quote_snapshot_id,
                     authority["semantic_hash"],
                     quote.raw_hash,
                     str(current_limit_price),
                     str(max_drift_bps),
                     at.isoformat(),
                     expires_at.isoformat(),
+                    armed_by,
+                    arm_source,
+                    operator_session_id,
                     serialized,
                 ),
             )
@@ -643,9 +755,19 @@ class DurableExecutionStore:
             ).fetchone()
             if approval is not None:
                 arm = self.connection.execute(
-                    "SELECT expires_at FROM approval_arms WHERE intent_id=?", (row["intent_id"],)
+                    """SELECT arm_id, expires_at FROM approval_arms
+                       WHERE intent_id=? AND status='ACTIVE'
+                       ORDER BY version DESC LIMIT 1""",
+                    (row["intent_id"],),
                 ).fetchone()
-                if arm is None or datetime.fromisoformat(arm["expires_at"]) <= at:
+                if arm is None:
+                    raise ExecutionInvariantError("approval arm missing or expired")
+                if datetime.fromisoformat(arm["expires_at"]) <= at:
+                    self.connection.execute(
+                        "UPDATE approval_arms SET status='EXPIRED' WHERE arm_id=?",
+                        (arm["arm_id"],),
+                    )
+                    self.connection.commit()
                     raise ExecutionInvariantError("approval arm missing or expired")
             if reservation.expires_at <= at:
                 self.connection.execute(
@@ -674,6 +796,12 @@ class DurableExecutionStore:
                 "UPDATE execution_intents SET status=?, version=version+1 WHERE intent_id=?",
                 (ExecutionStatus.SUBMITTING.value, row["intent_id"]),
             )
+            if approval is not None:
+                self.connection.execute(
+                    """UPDATE approval_arms SET status='CONSUMED', consumed_at=?
+                       WHERE arm_id=? AND status='ACTIVE'""",
+                    (at.isoformat(), arm["arm_id"]),
+                )
             intent_row = self._intent_row(row["intent_id"])
             self.connection.commit()
             command = OutboxCommand.model_validate_json(row["command_json"]).model_copy(
@@ -837,9 +965,7 @@ class DurableExecutionStore:
                 "UPDATE execution_intents SET status=?, version=version+1 WHERE intent_id=?",
                 (ExecutionStatus.CANCEL_UNKNOWN.value, row["intent_id"]),
             )
-            self._append_order_event(
-                row["intent_id"], "CANCEL_UNKNOWN", at, {"reason": reason}
-            )
+            self._append_order_event(row["intent_id"], "CANCEL_UNKNOWN", at, {"reason": reason})
 
     def mark_cancel_delivered(self, command_id: str, *, at: datetime) -> None:
         with self.connection:
@@ -931,7 +1057,9 @@ class DurableExecutionStore:
                 else datetime.min.replace(tzinfo=snapshot_as_of.tzinfo)
             )
             if snapshot_as_of <= claimed_at:
-                raise ExecutionInvariantError("broker snapshot does not post-date uncertain submission")
+                raise ExecutionInvariantError(
+                    "broker snapshot does not post-date uncertain submission"
+                )
             self.connection.execute(
                 """UPDATE outbox_commands SET status='PENDING', fencing_token=NULL,
                    claimed_at=NULL, delivered_at=NULL WHERE command_id=?""",
@@ -1098,9 +1226,7 @@ class DurableExecutionStore:
         ).fetchone()
         if existing is not None:
             return str(existing["ticket_id"])
-        ticket_id = canonical_hash(
-            {"reason_code": reason_code, "source": source, "created_at": at}
-        )
+        ticket_id = canonical_hash({"reason_code": reason_code, "source": source, "created_at": at})
         self.connection.execute(
             "INSERT INTO freeze_tickets VALUES (?, ?, ?, ?, ?, NULL, NULL)",
             (ticket_id, reason_code, severity, source, at.isoformat()),
@@ -1280,7 +1406,12 @@ class DurableExecutionStore:
                    ORDER BY snapshot_as_of DESC, recorded_at DESC LIMIT 1""",
                 (snapshot.visibility_scope_hash,),
             ).fetchone()
-            if previous is not None and previous["semantic_hash"] == snapshot.semantic_hash:
+            equivalence = self._authority_equivalence(previous, snapshot)
+            if (
+                previous is not None
+                and previous["semantic_hash"] == snapshot.semantic_hash
+                and bool(equivalence["state_equivalent"])
+            ):
                 previous_as_of = datetime.fromisoformat(previous["snapshot_as_of"])
                 independent = (
                     previous["certificate_id"] != snapshot.completeness_certificate_id
@@ -1296,15 +1427,17 @@ class DurableExecutionStore:
                 else:
                     count = int(row["consecutive_count"]) if row is not None else 1
                     first_seen = (
-                        datetime.fromisoformat(row["first_seen_at"])
-                        if row is not None
-                        else at
+                        datetime.fromisoformat(row["first_seen_at"]) if row is not None else at
                     )
                     disposition = "REJECTED_NON_INDEPENDENT"
             elif previous is not None:
                 disposition = "ACCEPTED_DIVERGENT_RESET"
             self.connection.execute(
-                "INSERT INTO broker_snapshot_votes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                """INSERT INTO broker_snapshot_votes
+                   (observation_id, certificate_id, session_id, visibility_scope_hash,
+                    semantic_hash, snapshot_as_of, final_watermark, recorded_at,
+                    disposition, snapshot_json, equivalence_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     snapshot.observation_id,
                     snapshot.completeness_certificate_id,
@@ -1315,6 +1448,8 @@ class DurableExecutionStore:
                     snapshot.final_watermark,
                     at.isoformat(),
                     disposition,
+                    snapshot.model_dump_json(),
+                    json.dumps(equivalence, sort_keys=True, separators=(",", ":")),
                 ),
             )
             self.connection.execute(
@@ -1339,6 +1474,66 @@ class DurableExecutionStore:
         except BaseException:
             self.connection.rollback()
             raise
+
+    @staticmethod
+    def _authority_equivalence(
+        previous: sqlite3.Row | None,
+        snapshot: BrokerSnapshot,
+        *,
+        valuation_tolerance_bps: Decimal = Decimal("25"),
+        valuation_absolute_floor: Decimal = Decimal("1"),
+    ) -> dict[str, object]:
+        exact_equal = bool(
+            previous is not None and previous["semantic_hash"] == snapshot.semantic_hash
+        )
+        differences: dict[str, dict[str, str | bool]] = {}
+        previous_snapshot: BrokerSnapshot | None = None
+        if previous is not None and previous["snapshot_json"]:
+            previous_snapshot = BrokerSnapshot.model_validate_json(previous["snapshot_json"])
+        same_policy = bool(
+            previous_snapshot is not None
+            and previous_snapshot.normalization_policy_hash == snapshot.normalization_policy_hash
+        )
+        same_fields = bool(
+            previous_snapshot is not None
+            and set(previous_snapshot.valuation_fields) == set(snapshot.valuation_fields)
+        )
+        within_budget = same_fields
+        if previous_snapshot is not None and same_fields:
+            for key in sorted(snapshot.valuation_fields):
+                before = previous_snapshot.valuation_fields[key]
+                after = snapshot.valuation_fields[key]
+                difference = abs(after - before)
+                allowed = max(
+                    valuation_absolute_floor,
+                    abs(before) * valuation_tolerance_bps / Decimal("10000"),
+                )
+                allowed_field = difference <= allowed
+                within_budget = within_budget and allowed_field
+                differences[key] = {
+                    "previous": str(before),
+                    "current": str(after),
+                    "absolute_difference": str(difference),
+                    "allowed_difference": str(allowed),
+                    "within_budget": allowed_field,
+                }
+        state_equivalent = exact_equal and same_policy and within_budget
+        return {
+            "state_equivalent": state_equivalent,
+            "exact_fields_equal": exact_equal,
+            "tolerant_fields_within_budget": within_budget,
+            "normalization_policy_equal": same_policy,
+            "valuation_tolerance_bps": str(valuation_tolerance_bps),
+            "valuation_absolute_floor": str(valuation_absolute_floor),
+            "differences": differences,
+            "excluded_from_exact_hash": ["NetLiquidation", "BuyingPower"],
+            "explanation": (
+                "exact economic state matched and valuation observations stayed within "
+                "a fail-closed drift budget; market causality is not inferred"
+                if state_equivalent
+                else "authority state was not equivalent under the normalization policy"
+            ),
+        }
 
     def record_broker_snapshot_authority(
         self,
@@ -1428,6 +1623,8 @@ class DurableExecutionStore:
         provider: str,
         feed_mode: str,
         market_phase: str,
+        venue: str = "UNKNOWN",
+        currency: str = "USD",
         recorded_at: datetime | None = None,
     ) -> QuoteSnapshot:
         raw_hash = canonical_hash(
@@ -1439,10 +1636,19 @@ class DurableExecutionStore:
                 "provider_timestamp": provider_timestamp,
                 "provider": provider,
                 "feed_mode": feed_mode,
+                "venue": venue,
+                "currency": currency,
             }
         )
         freshness_policy_hash = canonical_hash(
-            {"quote_max_age_seconds": 5, "eligible_market_phases": ["OPEN", "REGULAR"]}
+            {
+                "quote_max_age_seconds": 5,
+                "provider_max_age_seconds": 5,
+                "eligible_market_phases": ["OPEN", "REGULAR"],
+                "required_feed_mode": "REALTIME",
+                "maximum_spread_bps": 50,
+                "venue_and_currency_required": True,
+            }
         )
         body = {
             "symbol": symbol,
@@ -1454,12 +1660,12 @@ class DurableExecutionStore:
             "provider": provider,
             "feed_mode": feed_mode,
             "market_phase": market_phase,
+            "venue": venue,
+            "currency": currency,
             "raw_hash": raw_hash,
             "freshness_policy_hash": freshness_policy_hash,
         }
-        quote = QuoteSnapshot.model_validate(
-            {"quote_snapshot_id": canonical_hash(body), **body}
-        )
+        quote = QuoteSnapshot.model_validate({"quote_snapshot_id": canonical_hash(body), **body})
         with self.connection:
             self.connection.execute(
                 "INSERT OR IGNORE INTO quote_snapshots VALUES (?, ?, ?, ?, ?, ?)",
@@ -1543,17 +1749,13 @@ class DurableExecutionStore:
         projection = self.connection.execute(
             "SELECT cash_delta FROM cash_projection WHERE singleton=1"
         ).fetchone()
-        cash_delta = Decimal(projection["cash_delta"]) - Decimal(
-            baseline["projection_cash_delta"]
-        )
+        cash_delta = Decimal(projection["cash_delta"]) - Decimal(baseline["projection_cash_delta"])
         return {
             "cash": Decimal(baseline["cash"]) + cash_delta,
             "settled_cash": None,
             "buying_power": None,
             "accrued_cash": (
-                Decimal(baseline["accrued_cash"])
-                if baseline["accrued_cash"] is not None
-                else None
+                Decimal(baseline["accrued_cash"]) if baseline["accrued_cash"] is not None else None
             ),
         }
 

@@ -7,7 +7,7 @@ const formatAge = (value?: string | null) => {
   const seconds = Math.max(0, Math.round((Date.now() - Date.parse(value)) / 1000));
   return seconds < 60 ? `${seconds} 秒前` : `${Math.floor(seconds / 60)} 分钟前`;
 };
-const secondsLabel = (value?: number | null) => value == null ? "无数据" : value < 60 ? `${Math.round(value)} 秒` : `${Math.floor(value / 60)} 分钟`;
+const secondsLabel = (value?: number | null) => value == null ? "无数据" : value < 0 ? "未来时间" : value < 60 ? `${Math.round(value)} 秒` : `${Math.floor(value / 60)} 分钟`;
 const shortId = (value: string) => `${value.slice(0, 8)}…`;
 
 function Card({ label, value, detail, danger = false }: { label: string; value: string | number; detail: string; danger?: boolean }) {
@@ -47,7 +47,8 @@ export function App() {
     <section className="grid metrics" aria-label="关键事实新鲜度">
       <Card label="Authority age" value={secondsLabel(data.freshness.authority_age_seconds)} detail="交易准入权威" danger={(data.freshness.authority_age_seconds ?? Infinity) > 30} />
       <Card label="Observer fact age" value={secondsLabel(data.freshness.observer_fact_age_seconds)} detail="IBKR 原始事实" danger={(data.freshness.observer_fact_age_seconds ?? Infinity) > 30} />
-      <Card label="Quote age" value={secondsLabel(data.freshness.quote_age_seconds)} detail="冻结行情胶囊" danger={(data.freshness.quote_age_seconds ?? Infinity) > 5} />
+      <Card label="Quote age" value={secondsLabel(data.freshness.quote_age_seconds)} detail="冻结行情胶囊" danger={data.freshness.quote_age_seconds == null || data.freshness.quote_age_seconds < 0 || data.freshness.quote_age_seconds > 5} />
+      <Card label="Provider quote age" value={secondsLabel(data.freshness.quote_provider_age_seconds)} detail="行情源自身时间" danger={data.freshness.quote_provider_age_seconds == null || data.freshness.quote_provider_age_seconds < 0 || data.freshness.quote_provider_age_seconds > 5} />
       <Card label="Reconcile age" value={secondsLabel(data.freshness.reconciliation_age_seconds)} detail="最近对账" danger={data.freshness.reconciliation_age_seconds == null} />
     </section>
     <section className="grid panels">
@@ -55,7 +56,8 @@ export function App() {
       <article className="panel"><div className="panel-title"><h2>执行状态分布</h2><span>{data.execution.reserved_notional} reserved</span></div><div className="rows">{Object.keys(data.execution.status_counts).length === 0 ? <p className="empty">当前没有执行意图</p> : Object.entries(data.execution.status_counts).map(([key, value]) => <div className="row" key={key}><span>{key}</span><b>{value}</b></div>)}</div></article>
       <article className="panel wide"><div className="panel-title"><h2>Authority 时间轴</h2><span>候选与晋级严格分离</span></div><div className="rows">{data.authority_timeline.length === 0 ? <p className="empty">尚无 Authority 候选</p> : data.authority_timeline.map(item => <div className="row" key={item.certificate_id}><span>{new Date(item.recorded_at).toLocaleTimeString()} · {shortId(item.certificate_id)}</span><b className={item.promotion_status === "PROMOTED" ? "ok-text" : "bad-text"}>{item.reconciliation_status} / {item.promotion_status}</b></div>)}</div></article>
       <article className="panel"><div className="panel-title"><h2>差异生命周期</h2><span>{data.discrepancies.length} recent</span></div><div className="rows">{data.discrepancies.length === 0 ? <p className="empty">没有差异记录</p> : data.discrepancies.slice(0, 8).map(item => <div className="row" key={`${item.kind}-${item.entity_key}`}><span>{item.kind}</span><b>{item.status}</b></div>)}</div></article>
-      <article className="panel"><div className="panel-title"><h2>恢复与 Burn-in</h2><span>{data.backup.status}</span></div><dl><div><dt>备份年龄</dt><dd>{secondsLabel(data.backup.age_seconds)}</dd></div><div><dt>独立会话</dt><dd>{data.burn_in.independent_sessions} / {data.burn_in.target_sessions}</dd></div><div><dt>TWS 重启</dt><dd>{data.burn_in.tws_restarts} / {data.burn_in.target_tws_restarts}</dd></div><div><dt>Golden Tape</dt><dd>{data.burn_in.golden_tapes} / {data.burn_in.target_golden_tapes}</dd></div></dl></article>
+      <article className="panel"><div className="panel-title"><h2>恢复与 Burn-in</h2><span>{data.backup.status}</span></div><dl><div><dt>备份年龄</dt><dd>{secondsLabel(data.backup.age_seconds)}</dd></div><div><dt>完整观察</dt><dd>{data.burn_in.completed_observation_sessions} / {data.burn_in.target_sessions}</dd></div><div><dt>连续稳定</dt><dd>{data.burn_in.consecutive_stable_sessions} / {data.burn_in.target_sessions}</dd></div><div><dt>分歧重置</dt><dd>{data.burn_in.divergent_resets}</dd></div><div><dt>TWS 重启</dt><dd>{data.burn_in.tws_restarts} / {data.burn_in.target_tws_restarts}</dd></div><div><dt>Golden Tape</dt><dd>{data.burn_in.golden_tapes} / {data.burn_in.target_golden_tapes}</dd></div></dl></article>
+      <article className="panel"><div className="panel-title"><h2>Canary 准入原因</h2><span>{data.paper_canary_safety_case.status}</span></div><div className="rows">{Object.entries(data.readiness.paper_canary.checks).map(([key, ok]) => <div className="row" key={key}><span>{key.replaceAll("_", " ")}</span><b className={ok ? "ok-text" : "bad-text"}>{ok ? "PASS" : "BLOCKED"}</b></div>)}</div></article>
       <article className="panel wide"><div className="panel-title"><h2>运行证据</h2><span>只显示有来源的指标</span></div><div className="evidence"><div><b>{data.reality_gap.samples}</b><span>Reality Gap 样本</span></div><div><b>{data.reality_gap.no_trade_outcomes}</b><span>No-trade 结果</span></div><div><b>{data.heartbeats.length}</b><span>组件心跳</span></div></div><footer>{Object.values(data.source_notes).map(note => <p key={note}>{note}</p>)}</footer></article>
     </section>
   </main>;

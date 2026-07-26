@@ -1,8 +1,8 @@
 # Active execution plan: complete Han Alpha platform
 
-Status: ACTIVE; M6 Authority hardened locally, M7-B read-only Ops complete locally, external gates blocked
+Status: ACTIVE; M7-B.1 normalization/admission complete locally, external gates blocked
 Owner: Codex
-Last updated: 2026-07-19
+Last updated: 2026-07-26
 
 ## Goal
 
@@ -44,6 +44,7 @@ Record important decisions here with date, alternatives, and consequences. Do no
 - 2026-07-19: M5 review hardening unified durable freeze authority, closed fencing/Unknown/cash/protection/account-read gaps and removed in-memory pending orders. M6-A through M6-E now have a local read-only fact-tape, completeness-certificate, reducer and shadow-gap kernel. Real Paper burn-in and M6-F remain blocked; no Broker write was made.
 - 2026-07-20: M6 audit hardening added callback Queue single-writer, transport-only observation, semantic request barriers, visibility scope, native identity, M5 snapshot adapter, two-snapshot consensus, cash epochs, two-stage approve/arm, durable cancel and schedule-aware reality gaps. M7-A added source-backed read-only Ops API/dashboard plus backup/restore. No Provider or Broker write was made; real Paper burn-in remains blocked.
 - 2026-07-20: M7-A review hardening made Snapshot consensus non-replayable, split component Authority hashes, restricted promotion to complete CONVERGED candidates, replaced caller-reported quote evidence with persisted Quote Capsules, separated Bracket leg identity, added Completed Orders facts, discrepancy lifecycle and Generation Restore. M7-B added layered readiness, fact-age status, Authority timeline, backup and honest burn-in progress. No Provider or Broker write was made.
+- 2026-07-26: M7-B.1 separated Observation Window, Scope Policy and Canonical Broker State; added bounded valuation-equivalence receipts, genuine dual-session consensus, versioned re-Arms, strict Quote admission, full Canary Safety Case gating, corrected Ops metrics and non-destructive idempotent restore. Local verification passed 205 Python tests at 85.14% branch-aware coverage plus frontend/build checks. Real IBKR burn-in, PIT Alpha evidence and every Broker write remain blocked.
 
 ## Verification log
 
@@ -71,3 +72,7 @@ audit amendment is in `../../v2-plan/12_M4_M5_AUDIT_INTEGRATION_DECISIONS_ZH.md`
 M5 evidence is maintained in `../completed/007-m5-durable-execution.md`. The next
 bounded milestone is tracked in `008-m6-ibkr-observation.md`; real connectivity,
 callback burn-in, durable cancel and the first Paper Manual order remain blocked.
+
+M7-B.1 local evidence and the next dependency order are tracked in
+`011-m7b1-normalization-admission.md`; review integration decisions are recorded in
+`../../v2-plan/16_M7B_REVIEW_AND_M7B1_DECISIONS_ZH.md`.

@@ -284,6 +284,9 @@ class BrokerSnapshot(BaseModel):
     executions_hash: str | None = None
     commissions_hash: str | None = None
     protection_hash: str | None = None
+    valuation_hash: str | None = None
+    normalization_policy_hash: str | None = None
+    valuation_fields: dict[str, Decimal] = Field(default_factory=dict)
     order_snapshot_complete: bool = True
     position_snapshot_complete: bool = True
     execution_snapshot_complete: bool = True
@@ -311,6 +314,8 @@ class QuoteSnapshot(BaseModel):
     provider: str = Field(min_length=1)
     feed_mode: str
     market_phase: str
+    venue: str = "UNKNOWN"
+    currency: str = "USD"
     raw_hash: str = Field(pattern=HASH_PATTERN)
     freshness_policy_hash: str = Field(pattern=HASH_PATTERN)
 

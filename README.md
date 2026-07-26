@@ -1,6 +1,6 @@
 # Han Alpha Trading System
 
-> M6 status (2026-07-19): M5 durable execution is hardened and the M6 read-only IBKR fact-tape/reducer/shadow kernel is locally verified. Real IBKR Paper callbacks, burn-in and all Paper writes remain blocked. This validates engineering mechanics only—not venue fidelity, production readiness or alpha.
+> M7-B.1 status (2026-07-26): cross-session Authority normalization, bounded valuation equivalence, strict Quote admission, re-Arm and read-only Canary reasoning are locally verified. Real IBKR Paper callbacks, 30-session/Golden-Tape/reset burn-in, PIT Alpha evidence and all Paper writes remain blocked. This validates engineering mechanics only—not venue fidelity, production readiness or alpha.
 
 A directly runnable, evidence-grounded trading research and IBKR paper-execution system.
 
@@ -26,6 +26,7 @@ The system is built around one rule: **LLMs may interpret evidence and veto trad
 - Point-in-time research contexts, interpretable baselines, walk-forward diagnostics, bounded counterfactuals and fail-closed promotion review.
 - Durable capsule/reservation/outbox/inbox execution control, persistent freeze tickets, exact cash/protection reconciliation and fault-injectable Fake Broker.
 - Read-only IBKR callback fact tape, snapshot completeness certificates, order-independent reducer and shadow execution reality-gap ledger.
+- Stable Observer Scope Policy, canonical broker-state Authority, versioned Approval Arms and source-backed read-only Ops Dashboard.
 - Unit, integration, and adversarial tests.
 
 ## Safety boundary

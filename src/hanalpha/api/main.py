@@ -30,6 +30,8 @@ class ApprovalArmRequest(BaseModel):
     quote_snapshot_id: str = Field(min_length=64, max_length=64)
     max_drift_bps: Decimal = Field(gt=0, le=10)
     expires_at: datetime
+    actor_id: str = Field(min_length=3, max_length=200)
+    operator_session_id: str = Field(min_length=3, max_length=200)
 
 
 class CancelIntentRequest(BaseModel):
@@ -120,9 +122,15 @@ async def ready_paper_canary() -> dict[str, Any]:
     return {"as_of": result["as_of"], **result["layers"]["paper_canary"]}
 
 
+@app.get("/ready/runtime-control")
+async def ready_runtime_control() -> dict[str, Any]:
+    result = get_ops().readiness(await get_system().status())
+    return {"as_of": result["as_of"], **result["layers"]["runtime_control"]}
+
+
 @app.get("/ops/overview")
 async def ops_overview() -> dict[str, Any]:
-    return get_ops().overview()
+    return get_ops().overview(runtime_status=await get_system().status())
 
 
 @app.get("/metrics")
@@ -228,8 +236,11 @@ async def arm_intent(
             authority_id=request.authority_id,
             quote_snapshot_id=request.quote_snapshot_id,
             max_drift_bps=request.max_drift_bps,
+            armed_by=request.actor_id,
             at=datetime.now(UTC),
             expires_at=request.expires_at,
+            arm_source="OPERATOR_API",
+            operator_session_id=request.operator_session_id,
         )
     except (KeyError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-07-26 — M7-B.1 authority normalization and admission
+
+- Split Observer envelopes from stable visibility policy and canonical broker state.
+- Added exact economic hashes, bounded valuation-equivalence receipts and genuine independent dual-session consensus tests.
+- Added versioned actor-attributed re-Arms and strict realtime Quote admission.
+- Separated Runtime Control readiness from the complete Paper Canary Safety Case.
+- Corrected Fact Drop, Unknown age, discrepancy revision, burn-in and restore truth.
+- Verified 205 Python tests at 85.14% branch-aware coverage, strict typing, frontend, package and smoke checks. No Provider or Broker write was performed.
+
 ## 2026-07-19 — M5 review hardening and M6 read-only observer kernel
 
 - Unified new-risk safety under durable Freeze Tickets, hardened fencing and Unknown Submission recovery, removed in-memory pending approvals, and added formal approval API/CLI receipts.

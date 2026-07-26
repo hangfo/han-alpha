@@ -1,6 +1,6 @@
 # M7-B execution plan: authority-aware read-only operations
 
-Status: LOCAL COMPLETE; real Paper burn-in and write controls BLOCKED
+Status: SUPERSEDED BY 011; M7-B LOCAL COMPLETE
 
 Last updated: 2026-07-20
 

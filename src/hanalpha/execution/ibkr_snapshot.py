@@ -80,16 +80,12 @@ class IBKRBrokerSnapshotAdapter:
                         filled_quantity=filled,
                         status=str(payload.get("status", "UNKNOWN")),
                         perm_id=(
-                            str(payload["perm_id"])
-                            if int(payload.get("perm_id", 0) or 0)
-                            else None
+                            str(payload["perm_id"]) if int(payload.get("perm_id", 0) or 0) else None
                         ),
                     )
                 )
                 continue
-            parent_key = by_numeric_id.get(
-                (int(payload.get("client_id", 0)), parent_id)
-            )
+            parent_key = by_numeric_id.get((int(payload.get("client_id", 0)), parent_id))
             if parent_key is None:
                 parent_key = canonical_hash(
                     {
@@ -146,15 +142,9 @@ class IBKRBrokerSnapshotAdapter:
         return BrokerSnapshot(
             as_of=certificate.as_of,
             cash=cash,
-            settled_cash=cls._optional_account_value(
-                account_values, "SettledCash", base_currency
-            ),
-            buying_power=cls._optional_account_value(
-                account_values, "BuyingPower", base_currency
-            ),
-            accrued_cash=cls._optional_account_value(
-                account_values, "AccruedCash", base_currency
-            ),
+            settled_cash=cls._optional_account_value(account_values, "SettledCash", base_currency),
+            buying_power=cls._optional_account_value(account_values, "BuyingPower", base_currency),
+            accrued_cash=cls._optional_account_value(account_values, "AccruedCash", base_currency),
             base_currency=base_currency,
             currency_balances=currency_balances or {base_currency: cash},
             complete=certificate.complete,
@@ -170,6 +160,11 @@ class IBKRBrokerSnapshotAdapter:
             executions_hash=certificate.executions_hash,
             commissions_hash=certificate.commissions_hash,
             protection_hash=certificate.protection_hash,
+            valuation_hash=certificate.valuation_hash,
+            normalization_policy_hash=certificate.normalization_policy_hash,
+            valuation_fields={
+                key: Decimal(value) for key, value in certificate.valuation_fields.items()
+            },
             order_snapshot_complete=certificate.order_snapshot_complete,
             position_snapshot_complete=certificate.position_snapshot_complete,
             execution_snapshot_complete=certificate.execution_snapshot_complete,
@@ -214,9 +209,7 @@ class IBKRBrokerSnapshotAdapter:
                 )
             )
             if client_key is None:
-                client_key = canonical_hash(
-                    {"session": model.session_id, "execution_root": root}
-                )
+                client_key = canonical_hash({"session": model.session_id, "execution_root": root})
             commission = model.effective_commissions.get(root, {})
             quantity = cls._int_quantity(execution.get("shares", 0))
             received_at = cls._received_at(execution, as_of)
@@ -228,9 +221,7 @@ class IBKRBrokerSnapshotAdapter:
                 "commission": commission,
                 "broker_time_parse_status": parse_status,
                 "broker_timezone": broker_timezone,
-                "clock_skew_ms": max(
-                    0, int((received_at - occurred_at).total_seconds() * 1000)
-                ),
+                "clock_skew_ms": max(0, int((received_at - occurred_at).total_seconds() * 1000)),
             }
             events.append(
                 BrokerEvent(
@@ -250,9 +241,7 @@ class IBKRBrokerSnapshotAdapter:
         return tuple(events)
 
     @staticmethod
-    def _key_from_ref(
-        order_ref: str, resolver: ClientKeyResolver | None
-    ) -> str | None:
+    def _key_from_ref(order_ref: str, resolver: ClientKeyResolver | None) -> str | None:
         if not order_ref.startswith("HA:"):
             return None
         encoded = order_ref.removeprefix("HA:")

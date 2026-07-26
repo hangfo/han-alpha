@@ -141,6 +141,8 @@ def execution_arm(
     intent_id: Annotated[str, typer.Option("--intent-id")],
     authority_id: Annotated[str, typer.Option("--authority-id")],
     quote_snapshot_id: Annotated[str, typer.Option("--quote-snapshot-id")],
+    actor: Annotated[str, typer.Option("--actor")],
+    operator_session_id: Annotated[str, typer.Option("--operator-session-id")],
     max_drift_bps: Annotated[str, typer.Option("--max-drift-bps")] = "10",
     ttl_seconds: Annotated[int, typer.Option("--ttl-seconds", min=1, max=5)] = 5,
 ) -> None:
@@ -153,8 +155,11 @@ def execution_arm(
             authority_id=authority_id,
             quote_snapshot_id=quote_snapshot_id,
             max_drift_bps=Decimal(max_drift_bps),
+            armed_by=actor,
             at=at,
             expires_at=at + timedelta(seconds=ttl_seconds),
+            arm_source="LOCAL_CLI",
+            operator_session_id=operator_session_id,
         )
         console.print(f"arm_id={arm_id} status=ARMED")
     finally:
@@ -171,7 +176,7 @@ def ibkr_observe(
     """Capture a read-only IBKR Paper fact tape and completeness certificate."""
 
     async def _run() -> None:
-        _, secrets = load_config()
+        config, secrets = load_config()
         if secrets.hanalpha_env.lower() != "paper":
             raise typer.BadParameter("IBKR observer requires HANALPHA_ENV=paper")
         if secrets.ibkr_port not in {4002, 7497}:
@@ -183,6 +188,7 @@ def ibkr_observe(
             port=secrets.ibkr_port,
             client_id=secrets.ibkr_client_id,
             account=secrets.ibkr_account,
+            base_currency=config.base_currency,
         )
         store = IBKRFactStore(state_path)
         execution_store = DurableExecutionStore(control)

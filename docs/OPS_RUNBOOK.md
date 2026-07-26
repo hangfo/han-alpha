@@ -16,12 +16,13 @@ curl -fsS http://127.0.0.1:8000/health
 curl -fsS http://127.0.0.1:8000/ready
 curl -fsS http://127.0.0.1:8000/ready/service
 curl -fsS http://127.0.0.1:8000/ready/observer
+curl -fsS http://127.0.0.1:8000/ready/runtime-control
 curl -fsS http://127.0.0.1:8000/ready/paper-canary
 curl -fsS http://127.0.0.1:8000/ops/overview
 curl -fsS http://127.0.0.1:8000/metrics
 ```
 
-`/health` proves only that the API process is alive. `/ready` uses the strict Paper Canary gate; the three scoped endpoints distinguish service, Observer and Canary readiness. Never route execution traffic based only on liveness or API response freshness.
+`/health` proves only that the API process is alive. `/ready` uses the strict Paper Canary gate. `runtime-control` is only the local runtime layer; it is not permission to send a Canary. The scoped endpoints distinguish service, Observer, runtime and full external-safety-case readiness. Never route execution traffic based only on liveness or API response freshness.
 
 For the dashboard:
 
@@ -70,7 +71,7 @@ python scripts/restore_state.py \
   --destination .state/restore-drill
 ```
 
-Restore writes `generations/<generation_id>`, fsyncs every file and directory, then atomically switches `CURRENT`. Run `PRAGMA integrity_check`, start every service from the resolved `CURRENT` generation, and require startup reconciliation. `--overwrite` is reserved for an explicitly approved generation switch after independent backup verification.
+Restore writes `generations/<generation_id>`, fsyncs every file and directory, then atomically switches `CURRENT`. Reinstalling the identical complete generation is idempotent; an existing corrupt generation is rejected and CURRENT is never deleted first. Run `PRAGMA integrity_check`, start every service from the resolved `CURRENT` generation, and require startup reconciliation. `--overwrite` is reserved for an explicitly approved generation switch after independent backup verification.
 
 ## Restart and upgrade
 

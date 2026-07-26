@@ -22,9 +22,16 @@ def test_ops_overview_readiness_metrics_and_heartbeat(tmp_path) -> None:
         assert overview["safety"]["frozen"]
         assert overview["observer"]["status"] == "NO_LOCAL_FACT_TAPE"
         assert overview["heartbeats"][0]["details"] == {"fence": 1}
-        assert not service.readiness(
-            {"broker_connected": True, "market_data_healthy": True}
-        )["ready"]
+        assert not service.readiness({"broker_connected": True, "market_data_healthy": True})[
+            "ready"
+        ]
+        runtime_overview = service.overview(
+            now=NOW,
+            runtime_status={"broker_connected": True, "market_data_healthy": True},
+        )
+        assert runtime_overview["readiness"]["observer"]["checks"]["broker_connected"]
+        assert not runtime_overview["readiness"]["paper_canary"]["ready"]
+        assert runtime_overview["paper_canary_safety_case"]["status"] == "NOT_ISSUED"
         metrics = service.prometheus()
         assert "hanalpha_control_frozen 1" in metrics
         with pytest.raises(ValueError, match="unsupported"):
@@ -57,6 +64,8 @@ def test_backup_restore_verifies_hash_and_sqlite_integrity(tmp_path) -> None:
     check.close()
     with pytest.raises(FileExistsError):
         restore_databases(manifest, restored)
+    assert restore_databases(manifest, restored, overwrite=True) == generation
+    assert current_generation(restored) == generation
 
     artifact = manifest.parent / source.name
     artifact.write_bytes(artifact.read_bytes() + b"tampered")
@@ -82,8 +91,26 @@ def test_generation_restore_never_exposes_a_mixed_epoch(tmp_path) -> None:
     generation = restore_databases(manifest, state)
     assert current_generation(state) == generation
     assert {path.name for path in generation.glob("*.sqlite3")} == {
-        "control.sqlite3", "observer.sqlite3"
+        "control.sqlite3",
+        "observer.sqlite3",
     }
+
+
+def test_overwrite_restore_never_deletes_current_generation(tmp_path) -> None:
+    source = tmp_path / "source.sqlite3"
+    connection = sqlite3.connect(source)
+    connection.execute("CREATE TABLE evidence(value TEXT NOT NULL)")
+    connection.execute("INSERT INTO evidence VALUES ('current')")
+    connection.commit()
+    connection.close()
+    manifest = backup_databases((source,), tmp_path / "backup-current")
+    state = tmp_path / "state-current"
+    generation = restore_databases(manifest, state)
+    assert (generation / source.name).exists()
+    restored = restore_databases(manifest, state, overwrite=True)
+    assert restored == generation
+    assert (generation / source.name).exists()
+    assert current_generation(state) == generation
 
 
 def test_backup_rejects_ambiguous_same_name_sources(tmp_path) -> None:
