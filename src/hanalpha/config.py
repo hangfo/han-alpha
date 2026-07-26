@@ -131,6 +131,7 @@ class SecretSettings(BaseSettings):
     hanalpha_config_path: str = "configs/paper.yaml"
     hanalpha_ledger_path: str = ".state/ledger.sqlite3"
     hanalpha_ibkr_observer_path: str = ".state/ibkr-observer.sqlite3"
+    massive_api_key: str | None = None
     polygon_api_key: str | None = None
     fred_api_key: str | None = None
     sec_user_agent: str | None = None
@@ -143,6 +144,7 @@ class SecretSettings(BaseSettings):
     ibkr_account: str | None = None
     hanalpha_broker_write_token: SecretStr | None = None
     hanalpha_operator_token: SecretStr | None = None
+    hanalpha_safety_case_verification_key: SecretStr | None = None
 
 
 def load_config(path: str | Path | None = None) -> tuple[AppConfig, SecretSettings]:

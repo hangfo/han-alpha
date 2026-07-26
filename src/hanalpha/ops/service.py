@@ -5,8 +5,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from hanalpha.execution.admission import evaluate_quote_admission
+from hanalpha.execution.control_models import BrokerSnapshot, QuoteSnapshot
 from hanalpha.execution.control_store import DurableExecutionStore
 from hanalpha.execution.ibkr_observer import IBKRFactStore
+from hanalpha.execution.safety_case import SafetyCaseVerification, verify_safety_case
 
 
 class OpsService:
@@ -16,9 +19,16 @@ class OpsService:
     OBSERVER_MAX_AGE = timedelta(seconds=30)
     HEARTBEAT_MAX_AGE = timedelta(seconds=30)
 
-    def __init__(self, store: DurableExecutionStore, *, observer_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        store: DurableExecutionStore,
+        *,
+        observer_path: Path | None = None,
+        safety_case_verification_key: bytes | None = None,
+    ) -> None:
         self.store = store
         self.observer_path = observer_path
+        self.safety_case_verification_key = safety_case_verification_key
 
     @staticmethod
     def _age_seconds(value: str | None, now: datetime) -> float | None:
@@ -71,6 +81,11 @@ class OpsService:
             )
         ]
         observer = self._observer_summary(observed_at)
+        selected_scope = (
+            str(authority["visibility_scope_hash"])
+            if authority
+            else observer.get("visibility_scope_hash")
+        )
         authority_as_of = authority["snapshot_as_of"] if authority else None
         reconciliation_at = last_reconcile["completed_at"] if last_reconcile else None
         candidates = [
@@ -104,7 +119,7 @@ class OpsService:
                    ORDER BY COALESCE(last_seen_at, first_seen_at) DESC LIMIT 50"""
             )
         ]
-        vote_counts = {
+        all_scope_vote_counts = {
             str(row["disposition"]): int(row["count"])
             for row in self.store.connection.execute(
                 """SELECT disposition, COUNT(*) AS count FROM broker_snapshot_votes
@@ -126,7 +141,66 @@ class OpsService:
             self._signed_age_seconds(quote["provider_timestamp"], observed_at) if quote else None
         )
         quote_document = json.loads(quote["quote_json"]) if quote else {}
+        quote_admission = (
+            evaluate_quote_admission(
+                QuoteSnapshot.model_validate(quote_document),
+                at=observed_at,
+                expected_currency=(
+                    str(runtime_status["base_currency"])
+                    if runtime_status and runtime_status.get("base_currency")
+                    else None
+                ),
+            )
+            if quote
+            else None
+        )
         safety_case_document = json.loads(safety_case["case_json"]) if safety_case else {}
+        authority_snapshot = (
+            BrokerSnapshot.model_validate_json(authority["snapshot_json"])
+            if authority
+            else None
+        )
+        safety_verification = (
+            verify_safety_case(
+                safety_case_document,
+                database_status=str(safety_case["status"]),
+                at=observed_at,
+                verification_key=self.safety_case_verification_key,
+                expected_scope_hash=selected_scope,
+                expected_bindings={
+                    "git_commit": (
+                        str(runtime_status["git_commit"])
+                        if runtime_status and runtime_status.get("git_commit")
+                        else None
+                    ),
+                    "config_hash": (
+                        str(runtime_status["config_hash"])
+                        if runtime_status and runtime_status.get("config_hash")
+                        else None
+                    ),
+                    "account_hash": (
+                        authority_snapshot.account_hash if authority_snapshot else None
+                    ),
+                    "environment": (
+                        str(runtime_status["environment"])
+                        if runtime_status and runtime_status.get("environment")
+                        else None
+                    ),
+                    "normalization_policy_hash": (
+                        authority_snapshot.normalization_policy_hash
+                        if authority_snapshot
+                        else None
+                    ),
+                },
+            )
+            if safety_case
+            else SafetyCaseVerification(
+                verified=False,
+                reasons=("NOT_ISSUED",),
+                safety_case_id=None,
+                evidence_checks={},
+            )
+        )
         readiness = self.layered_readiness(
             runtime_status=runtime_status or {},
             now=observed_at,
@@ -137,14 +211,36 @@ class OpsService:
             unknown=unknown,
             naked=int(naked["count"]),
             heartbeats=heartbeats,
-            quote_age=quote_age,
-            quote_provider_age=quote_provider_age,
-            quote_document=quote_document,
-            safety_case=safety_case_document,
+            quote_evidence_eligible=bool(
+                quote_admission is not None and quote_admission.eligible
+            ),
+            safety_case_verification=safety_verification,
         )
-        stable_consensus = self.store.connection.execute(
-            "SELECT COALESCE(MAX(consecutive_count), 0) FROM broker_snapshot_consensus"
-        ).fetchone()[0]
+        if selected_scope:
+            vote_counts = {
+                str(row["disposition"]): int(row["count"])
+                for row in self.store.connection.execute(
+                    """SELECT disposition, COUNT(*) AS count FROM broker_snapshot_votes
+                       WHERE visibility_scope_hash=? GROUP BY disposition""",
+                    (selected_scope,),
+                )
+            }
+            stable_row = self.store.connection.execute(
+                """SELECT consecutive_count FROM broker_snapshot_consensus
+                   WHERE visibility_scope_hash=?""",
+                (selected_scope,),
+            ).fetchone()
+            stable_consensus = int(stable_row["consecutive_count"]) if stable_row else 0
+            reset = self.store.connection.execute(
+                """SELECT equivalence_json FROM broker_snapshot_votes
+                   WHERE visibility_scope_hash=? AND disposition='ACCEPTED_DIVERGENT_RESET'
+                   ORDER BY recorded_at DESC LIMIT 1""",
+                (selected_scope,),
+            ).fetchone()
+        else:
+            vote_counts = {}
+            stable_consensus = 0
+            reset = None
         return {
             "as_of": observed_at.isoformat(),
             "environment": "paper-first",
@@ -187,6 +283,8 @@ class OpsService:
             "heartbeats": heartbeats,
             "backup": self._backup_summary(heartbeats),
             "burn_in": {
+                "scope_hash": selected_scope,
+                "scope_policy": observer.get("scope_policy"),
                 "completed_observation_sessions": sum(
                     vote_counts.get(key, 0)
                     for key in (
@@ -209,12 +307,24 @@ class OpsService:
                 "golden_tapes": 0,
                 "target_golden_tapes": 10,
                 "vote_dispositions": vote_counts,
+                "all_scope_vote_dispositions": all_scope_vote_counts,
+                "last_reset_reason": (
+                    json.loads(reset["equivalence_json"]).get("explanation")
+                    if reset and reset["equivalence_json"]
+                    else None
+                ),
             },
             "paper_canary_safety_case": {
                 "available": safety_case is not None,
-                "status": safety_case["status"] if safety_case else "NOT_ISSUED",
+                "status": (
+                    "VERIFIED"
+                    if safety_verification.verified
+                    else (str(safety_case["status"]) if safety_case else "NOT_ISSUED")
+                ),
                 "created_at": safety_case["created_at"] if safety_case else None,
-                "safety_case_id": safety_case_document.get("safety_case_id"),
+                "safety_case_id": safety_verification.safety_case_id,
+                "verified": safety_verification.verified,
+                "reasons": list(safety_verification.reasons),
             },
             "reality_gap": {
                 "samples": self._count("reality_gap_ledger"),
@@ -251,10 +361,8 @@ class OpsService:
         unknown: int,
         naked: int,
         heartbeats: list[dict[str, Any]],
-        quote_age: float | None,
-        quote_provider_age: float | None,
-        quote_document: dict[str, Any],
-        safety_case: dict[str, Any],
+        quote_evidence_eligible: bool,
+        safety_case_verification: SafetyCaseVerification,
     ) -> dict[str, Any]:
         service_checks = {"control_database": True, "api_process": True}
         observer_checks = {
@@ -280,40 +388,67 @@ class OpsService:
             and float(item["age_seconds"]) <= self.HEARTBEAT_MAX_AGE.total_seconds()
             for item in heartbeats
         }
+        required_heartbeats = {
+            "observer": ("broker-observer",),
+            "shadow": ("broker-observer", "market-data", "reconciler"),
+            "runtime_control": (
+                "broker-observer",
+                "execution-worker",
+                "market-data",
+                "reconciler",
+            ),
+            "paper_canary": (
+                "broker-observer",
+                "execution-worker",
+                "market-data",
+                "reconciler",
+                "durable-writer",
+                "permit-verifier",
+            ),
+        }
+
+        def required_heartbeat_checks(layer: str) -> dict[str, bool]:
+            return {
+                f"heartbeat_{component.replace('-', '_')}": heartbeat_checks.get(
+                    component, False
+                )
+                for component in required_heartbeats[layer]
+            }
+
+        observer_checks = {
+            **observer_checks,
+            **required_heartbeat_checks("observer"),
+        }
         runtime_control_checks = {
             **observer_checks,
             **authority_checks,
             "market_data_healthy": bool(runtime_status.get("market_data_healthy", False)),
-            "component_heartbeats": bool(heartbeat_checks) and all(heartbeat_checks.values()),
+            **required_heartbeat_checks("runtime_control"),
         }
-        quote_authority_valid = bool(
-            quote_age is not None
-            and quote_age >= 0
-            and quote_age <= 5
-            and quote_provider_age is not None
-            and quote_provider_age >= 0
-            and quote_provider_age <= 5
-            and quote_document.get("feed_mode") == "REALTIME"
-            and quote_document.get("market_phase") in {"OPEN", "REGULAR"}
-        )
-        required_safety_checks = (
-            "burn_in_passed",
-            "golden_tapes_passed",
-            "nightly_reset_passed",
-            "market_calendar_verified",
-            "real_cancel_passed",
-            "real_bracket_passed",
-            "paper_account_verified",
-            "durable_writer_available",
-            "canary_permit_valid",
-        )
+        external_checks = {
+            "burn_in_passed": "burn_in_manifest_hash",
+            "golden_tapes_passed": "golden_tape_corpus_hash",
+            "nightly_reset_passed": "nightly_reset_case_hash",
+            "market_calendar_verified": "market_calendar_policy_hash",
+            "real_cancel_passed": "cancel_case_hash",
+            "real_bracket_passed": "bracket_case_hash",
+            "paper_account_verified": "paper_account_proof_hash",
+        }
         paper_checks = {
             "runtime_control_ready": all(runtime_control_checks.values()),
-            "quote_authority_valid": quote_authority_valid,
+            "quote_evidence_eligible": quote_evidence_eligible,
+            "quote_intent_binding_verified": False,
+            "safety_case_verified": safety_case_verification.verified,
+            **required_heartbeat_checks("paper_canary"),
             **{
-                name: bool(safety_case.get("checks", {}).get(name, False))
-                for name in required_safety_checks
+                name: bool(
+                    safety_case_verification.verified
+                    and safety_case_verification.evidence_checks.get(evidence_name, False)
+                )
+                for name, evidence_name in external_checks.items()
             },
+            "durable_writer_available": heartbeat_checks.get("durable-writer", False),
+            "canary_permit_valid": False,
         }
         return {
             "service": {"ready": all(service_checks.values()), "checks": service_checks},
@@ -321,10 +456,12 @@ class OpsService:
             "authority": {"ready": all(authority_checks.values()), "checks": authority_checks},
             "shadow": {
                 "ready": all(authority_checks.values())
-                and bool(runtime_status.get("market_data_healthy", False)),
+                and bool(runtime_status.get("market_data_healthy", False))
+                and all(required_heartbeat_checks("shadow").values()),
                 "checks": {
                     **authority_checks,
                     "market_data_healthy": bool(runtime_status.get("market_data_healthy", False)),
+                    **required_heartbeat_checks("shadow"),
                 },
             },
             "runtime_control": {
@@ -435,6 +572,10 @@ class OpsService:
                 "commission_pending": certificate.executions_missing_commission_count,
                 "cash_complete": certificate.cash_snapshot_complete,
                 "visibility_complete": certificate.visibility.scope_complete,
+                "visibility_scope_hash": certificate.visibility.scope_hash,
+                "scope_policy": certificate.visibility.model_dump(
+                    mode="json", exclude={"observation_window", "scope_hash"}
+                ),
                 "critical_errors": list(certificate.critical_errors),
             }
         finally:

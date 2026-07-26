@@ -58,10 +58,12 @@ def backup_databases(sources: tuple[Path, ...], destination: Path) -> Path:
             {"name": source.name, "sha256": file_sha256(target), "size": target.stat().st_size}
         )
     created_at = datetime.now(UTC).isoformat()
+    content_set_hash = _canonical_hash({"databases": entries})
     generation_id = _canonical_hash({"created_at": created_at, "databases": entries})
     manifest_body: dict[str, Any] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "generation_id": generation_id,
+        "content_set_hash": content_set_hash,
         "created_at": created_at,
         "databases": entries,
     }

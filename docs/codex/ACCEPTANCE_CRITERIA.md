@@ -77,6 +77,11 @@ M7-B.1已把Observation Window、Scope Policy和Canonical Broker State分离，
 严格Quote准入。完整Paper Canary仍要求外部Safety Case、真实Writer/Cancel/
 Bracket与一次性Permit，因此不得据本地测试勾选真实Paper验收。
 
+E1进一步加入Completed Orders双Scope、不可变Session Artifact、Freshness
+Budget传播、当前Scope Burn-in和Safety Case Verifier；R1加入真实数据源资格门。
+当前机器缺少官方`ibapi`、Paper端口、Paper账户和Vendor凭证，因此这些新增
+本地合同仍不能勾选真实Broker或真实PIT验收。
+
 ## 8. 工程质量
 
 - [x] Ruff通过。

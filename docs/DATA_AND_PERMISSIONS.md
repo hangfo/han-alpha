@@ -34,6 +34,18 @@ Recommended first production provider:
 
 IBKR should remain the broker and execution source of truth, not the sole research-history database because historical requests are filtered and paced.
 
+R1 requires a passing immutable source qualification before production ingestion:
+
+```bash
+hanalpha pit vendor-preflight
+hanalpha pit qualify-source \
+  --profile configs/data-sources/massive-price-profile.json \
+  --output .state/pit/qualifications/massive.json
+```
+
+The repository Massive, SEC and FRED/ALFRED profiles intentionally remain BLOCKED
+until license, retention, timestamp, revision and survivorship evidence is supplied.
+
 ### SEC EDGAR
 
 Use public submissions and company-facts APIs with a descriptive User-Agent and rate limiting. Store:

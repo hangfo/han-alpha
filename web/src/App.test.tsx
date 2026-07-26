@@ -15,8 +15,8 @@ test("renders a source-backed safety overview", async () => {
     readiness: { service: { ready: true, checks: { api: true } }, observer: { ready: false, checks: { certificate: false } }, authority: { ready: false, checks: { fresh: false } }, shadow: { ready: false, checks: { market: false } }, runtime_control: { ready: false, checks: { broker: false } }, paper_canary: { ready: false, checks: { authority: false } } },
     authority_timeline: [], discrepancies: [], heartbeats: [],
     backup: { status: "NO_RECORDED_BACKUP", age_seconds: null },
-    burn_in: { completed_observation_sessions: 0, stable_consensus_votes: 0, consecutive_stable_sessions: 0, divergent_resets: 0, non_independent_rejections: 0, target_sessions: 30, process_restarts: 0, target_process_restarts: 3, tws_restarts: 0, target_tws_restarts: 2, nightly_resets: 0, target_nightly_resets: 1, golden_tapes: 0, target_golden_tapes: 10 },
-    paper_canary_safety_case: { available: false, status: "NOT_ISSUED", created_at: null },
+    burn_in: { scope_hash: null, completed_observation_sessions: 0, stable_consensus_votes: 0, consecutive_stable_sessions: 0, divergent_resets: 0, non_independent_rejections: 0, target_sessions: 30, process_restarts: 0, target_process_restarts: 3, tws_restarts: 0, target_tws_restarts: 2, nightly_resets: 0, target_nightly_resets: 1, golden_tapes: 0, target_golden_tapes: 10 },
+    paper_canary_safety_case: { available: false, status: "NOT_ISSUED", created_at: null, verified: false, reasons: ["NOT_ISSUED"] },
     reality_gap: { samples: 0, no_trade_outcomes: 3 },
     source_notes: { control: "durable SQLite projection" }
   }) }));

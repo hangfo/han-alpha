@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -453,9 +454,14 @@ class TradingSystem:
         }
 
     async def status(self) -> dict[str, Any]:
+        operating_mode = self.config.operating_mode.value
         return {
-            "operating_mode": self.config.operating_mode.value,
+            "operating_mode": operating_mode,
             "mode": self.config.mode,
+            "base_currency": self.config.base_currency,
+            "environment": "paper" if operating_mode.startswith("paper_") else operating_mode,
+            "config_hash": canonical_hash(self.config),
+            "git_commit": os.getenv("HANALPHA_GIT_COMMIT"),
             "capabilities": {
                 "broker_write": self.runtime_access.capabilities.broker_write,
                 "automatic_submission": self.runtime_access.capabilities.automatic_submission,

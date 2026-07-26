@@ -1,5 +1,56 @@
 # Verification report
 
+## E1/R1 local evidence entry - 2026-07-26
+
+Baseline: `99053d998a6fdff10b4b996c475ffed8dcaa0289`.
+
+Detailed review decisions:
+`docs/v2-plan/17_M7B1_REVIEW_AND_E1_R1_DECISIONS_ZH.md`.
+
+VERIFIED:
+
+- Completed Orders `api/all` scopes are explicit and map to distinct IBKR requests,
+  Scope Policies and burn-in counters.
+- Redacted zero-write Broker preflight, immutable per-session tape/certificate/manifest
+  export, hash verification and idempotent persistence are implemented.
+- Arm freshness is bounded by every upstream authority and Claim revalidates the
+  current Authority plus the shared quote-admission policy.
+- Safety Cases require canonical identity, active validity, non-revocation, current
+  Scope, complete artifact hashes and a trusted HMAC signature; persisted booleans
+  cannot make a case pass.
+- Readiness layers require explicit component Heartbeat sets, and current-Scope
+  stability is separated from all-Scope audit history.
+- Price, filing/event and macro source qualification fails closed on licensing,
+  PIT/revision/time semantics, symbology, survivorship and intended-use evidence.
+- Local environment probes were redacted and zero-write: official `ibapi`, Paper
+  ports, Paper account and vendor credentials were absent; no Broker or vendor
+  request was attempted.
+- `./scripts/preflight.sh`: PASS under Python 3.12.13.
+- `./scripts/verify_all.sh`: PASS; 215 Python tests, 85.04% branch-aware coverage,
+  Ruff, strict mypy over 106 source files, package/CLI/API/synthetic/backtest smoke,
+  2 Vitest tests, TypeScript/lint/Vite production build and zero npm vulnerabilities.
+- Real-browser QA against isolated FastAPI: the Scope and Canary reason graph
+  rendered from `/ops/overview` (200), the DOM had zero buttons, links or forms,
+  viewport overflow was absent and the console had no warning/error. The optional
+  unconfigured `favicon.ico` returned 404 and has no application effect.
+- `git diff --check`: PASS.
+
+BLOCKED:
+
+- Official authenticated IBKR Paper preflight, dual-Scope burn-in, resets, Golden
+  Tapes, callback truth map, real cancel/Bracket behavior and Safety Case issuance.
+- Written vendor retention/backtest rights, bounded raw samples and QUALIFIED
+  Massive/SEC/ALFRED source profiles.
+- Any real-data OOS alpha, capacity, profitability or production-readiness claim.
+
+NOT IMPLEMENTED:
+
+- Durable IBKR writer, Permit issuance/atomic consumption and first Paper Canary;
+  these remain intentionally gated behind E1 and E2.
+- Production vendor adapters and R2 strategy optimization; qualification must pass
+  before either begins.
+- Unattended Paper or live trading; no `live_auto` state exists.
+
 ## M7-B.1 authority normalization and admission - 2026-07-26
 
 Baseline: `ba85691581a3729dbfdaef97c6a5072f0f138b62`.

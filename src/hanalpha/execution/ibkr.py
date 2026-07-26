@@ -9,6 +9,7 @@ from typing import Any
 from hanalpha.domain.enums import OrderStatus, Side
 from hanalpha.domain.models import AccountSnapshot, OrderEvent, OrderRequest, Position, Quote
 from hanalpha.execution.ibkr_observer import (
+    CompletedOrdersScope,
     IBKRCallbackCollector,
     IBKRFactBridge,
     IBKRFactReducer,
@@ -380,6 +381,7 @@ class IBKRBroker:
         *,
         timeout: float = 10,
         drain_quiet_period: float = 0.2,
+        completed_orders_scope: CompletedOrdersScope = CompletedOrdersScope.API,
     ) -> tuple[SnapshotCompletenessCertificate, IBKRReadModel]:
         """Request account/order/position/execution truth without any broker write call."""
         if self.port not in {4002, 7497}:
@@ -404,7 +406,9 @@ class IBKRBroker:
             execution_filter.time = started_at.strftime("%Y%m%d 00:00:00 UTC")
             execution_scope = "FILTER_TIME_FROM_UTC_DAY_START"
         completed_orders_requested = hasattr(self.app, "reqCompletedOrders")
-        completed_orders_api_only = True if completed_orders_requested else None
+        completed_orders_api_only = (
+            completed_orders_scope.api_only if completed_orders_requested else None
+        )
         barrier = ObserverRequestBarrier(
             account_request_id=request_seed,
             execution_request_id=request_seed + 1,
@@ -460,7 +464,7 @@ class IBKRBroker:
         )
         self.app.reqAllOpenOrders()
         if completed_orders_requested:
-            self.app.reqCompletedOrders(True)
+            self.app.reqCompletedOrders(completed_orders_scope.api_only)
         self.app.reqPositions()
         self.app.reqExecutions(barrier.execution_request_id, execution_filter)
         deadline = time.monotonic() + timeout

@@ -1,6 +1,6 @@
 # Active execution plan: complete Han Alpha platform
 
-Status: ACTIVE; M7-B.1 normalization/admission complete locally, external gates blocked
+Status: ACTIVE; architecture frozen, E1/R1 local entry slices complete, external evidence blocked
 Owner: Codex
 Last updated: 2026-07-26
 
@@ -28,6 +28,10 @@ Codex must rerun and replace these statements with current command evidence.
 - [x] M5 durable execution control plane and Fake Broker
 - [ ] M6 IBKR Paper integration and observation (local hardening complete; real burn-in blocked)
 - [ ] M7 Ops Dashboard, observability and recovery operations (M7-B read-only local slice complete; deployed operations blocked)
+- [ ] E1 Broker Truth Readiness (local tooling complete; authenticated burn-in blocked)
+- [ ] R1 PIT Data Qualification (local qualification gate complete; vendor evidence blocked)
+- [ ] E2 Canary Authorization and E3 Paper Manual Execution
+- [ ] R2 Friction-aware out-of-sample and forward evidence
 - [ ] M8 Live Proposal independent review
 
 ## Decision log
@@ -45,6 +49,7 @@ Record important decisions here with date, alternatives, and consequences. Do no
 - 2026-07-20: M6 audit hardening added callback Queue single-writer, transport-only observation, semantic request barriers, visibility scope, native identity, M5 snapshot adapter, two-snapshot consensus, cash epochs, two-stage approve/arm, durable cancel and schedule-aware reality gaps. M7-A added source-backed read-only Ops API/dashboard plus backup/restore. No Provider or Broker write was made; real Paper burn-in remains blocked.
 - 2026-07-20: M7-A review hardening made Snapshot consensus non-replayable, split component Authority hashes, restricted promotion to complete CONVERGED candidates, replaced caller-reported quote evidence with persisted Quote Capsules, separated Bracket leg identity, added Completed Orders facts, discrepancy lifecycle and Generation Restore. M7-B added layered readiness, fact-age status, Authority timeline, backup and honest burn-in progress. No Provider or Broker write was made.
 - 2026-07-26: M7-B.1 separated Observation Window, Scope Policy and Canonical Broker State; added bounded valuation-equivalence receipts, genuine dual-session consensus, versioned re-Arms, strict Quote admission, full Canary Safety Case gating, corrected Ops metrics and non-destructive idempotent restore. Local verification passed 205 Python tests at 85.14% branch-aware coverage plus frontend/build checks. Real IBKR burn-in, PIT Alpha evidence and every Broker write remain blocked.
+- 2026-07-26: ADR 0010 freezes architecture expansion and replaces M7-B.x naming with E1/R1 evidence streams. E1 adds Completed Orders dual Scope, zero-write Preflight, immutable Session artifacts, freshness propagation, current-Scope burn-in, explicit Heartbeat sets and verified Safety Case semantics. R1 adds fail-closed vendor/license/PIT qualification profiles. No Broker/vendor request or order was made.
 
 ## Verification log
 
@@ -73,6 +78,8 @@ M5 evidence is maintained in `../completed/007-m5-durable-execution.md`. The nex
 bounded milestone is tracked in `008-m6-ibkr-observation.md`; real connectivity,
 callback burn-in, durable cancel and the first Paper Manual order remain blocked.
 
-M7-B.1 local evidence and the next dependency order are tracked in
-`011-m7b1-normalization-admission.md`; review integration decisions are recorded in
-`../../v2-plan/16_M7B_REVIEW_AND_M7B1_DECISIONS_ZH.md`.
+M7-B.1 local evidence is archived in
+`../completed/011-m7b1-normalization-admission.md`. The current parallel work is
+tracked in `012-e1-broker-truth-readiness.md` and
+`013-r1-pit-data-qualification.md`; review integration decisions are recorded in
+`../../v2-plan/17_M7B1_REVIEW_AND_E1_R1_DECISIONS_ZH.md`.

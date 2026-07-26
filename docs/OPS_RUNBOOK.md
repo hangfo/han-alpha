@@ -42,7 +42,9 @@ No order is sent by this command:
 HANALPHA_ENV=paper hanalpha ibkr-observe \
   --state .state/ibkr-observer.sqlite3 \
   --control .state/execution-control.sqlite3 \
-  --snapshots 2 --timeout 15
+  --snapshots 2 --timeout 15 \
+  --completed-orders-scope api \
+  --artifact-root .state/burn-in/api
 ```
 
 Prerequisites: official TWS API, Paper login, explicit allowlisted account, API read-only mode. Real connection/burn-in remains an external acceptance task.
@@ -71,7 +73,7 @@ python scripts/restore_state.py \
   --destination .state/restore-drill
 ```
 
-Restore writes `generations/<generation_id>`, fsyncs every file and directory, then atomically switches `CURRENT`. Reinstalling the identical complete generation is idempotent; an existing corrupt generation is rejected and CURRENT is never deleted first. Run `PRAGMA integrity_check`, start every service from the resolved `CURRENT` generation, and require startup reconciliation. `--overwrite` is reserved for an explicitly approved generation switch after independent backup verification.
+Restore writes `generations/<generation_id>`, fsyncs every file and directory, then atomically switches `CURRENT`. `generation_id` is manifest-addressed and includes creation time; `content_set_hash` identifies equal database bytes across generations. Reinstalling the identical complete generation is idempotent; an existing corrupt generation is rejected and CURRENT is never deleted first. Run `PRAGMA integrity_check`, start every service from the resolved `CURRENT` generation, and require startup reconciliation. `--overwrite` is reserved for an explicitly approved generation switch after independent backup verification.
 
 ## Restart and upgrade
 

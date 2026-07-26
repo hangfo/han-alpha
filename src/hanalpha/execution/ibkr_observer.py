@@ -45,6 +45,15 @@ class IBKRFactType(StrEnum):
     DRAIN_WATERMARK = "DRAIN_WATERMARK"
 
 
+class CompletedOrdersScope(StrEnum):
+    API = "api"
+    ALL = "all"
+
+    @property
+    def api_only(self) -> bool:
+        return self is CompletedOrdersScope.API
+
+
 class IBKRFactDraft(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -436,6 +445,49 @@ class IBKRFactStore:
                 (session_id,),
             )
         )
+
+    def export_session(self, session_id: str, destination: Path) -> None:
+        """Materialize one immutable session tape without leaking other sessions."""
+
+        session = self.connection.execute(
+            "SELECT * FROM ibkr_sessions WHERE session_id=?", (session_id,)
+        ).fetchone()
+        certificate = self.connection.execute(
+            """SELECT certificate_json FROM ibkr_completeness_certificates
+               WHERE session_id=?""",
+            (session_id,),
+        ).fetchone()
+        if session is None or certificate is None:
+            raise KeyError(session_id)
+        if destination.exists():
+            raise FileExistsError(destination)
+        exported = IBKRFactStore(destination)
+        try:
+            exported_session = exported.start_session(
+                host=str(session["host"]),
+                port=int(session["port"]),
+                client_id=int(session["client_id"]),
+                at=datetime.fromisoformat(session["started_at"]),
+            )
+            if exported_session != session_id:
+                raise RuntimeError("session export changed the session identity")
+            for fact in self.facts(session_id):
+                exported.write_draft(
+                    IBKRFactDraft(
+                        session_id=fact.session_id,
+                        fact_type=fact.fact_type,
+                        identity_key=fact.identity_key,
+                        payload=fact.payload,
+                        received_at=fact.received_at,
+                    )
+                )
+            exported.save_certificate(
+                SnapshotCompletenessCertificate.model_validate_json(
+                    certificate["certificate_json"]
+                )
+            )
+        finally:
+            exported.close()
 
     def save_certificate(self, certificate: SnapshotCompletenessCertificate) -> None:
         with self.connection:

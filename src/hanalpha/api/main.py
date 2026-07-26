@@ -42,6 +42,7 @@ class AppState:
     system: TradingSystem | None = None
     ledger: Ledger | None = None
     observer_path: Path | None = None
+    safety_case_verification_key: bytes | None = None
 
 
 state = AppState()
@@ -55,6 +56,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     state.system = system
     state.ledger = ledger
     state.observer_path = Path(secrets.hanalpha_ibkr_observer_path)
+    state.safety_case_verification_key = (
+        secrets.hanalpha_safety_case_verification_key.get_secret_value().encode()
+        if secrets.hanalpha_safety_case_verification_key
+        else None
+    )
     yield
     system.close()
     ledger.close()
@@ -75,7 +81,11 @@ def get_system() -> TradingSystem:
 
 
 def get_ops() -> OpsService:
-    return OpsService(get_system().execution_store, observer_path=state.observer_path)
+    return OpsService(
+        get_system().execution_store,
+        observer_path=state.observer_path,
+        safety_case_verification_key=state.safety_case_verification_key,
+    )
 
 
 def require_operator_access(

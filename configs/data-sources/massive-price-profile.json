@@ -1,0 +1,22 @@
+{
+  "schema_version": "pit-source-profile-v1",
+  "source_id": "massive-us-equities",
+  "provider": "Massive",
+  "product": "Stocks REST and Flat Files",
+  "intended_use": "price_backtest",
+  "checks": {
+    "systematic_backtest_license": {"status": "BLOCKED", "evidence": "The selected account plan and intended cache/backtest usage have not been contractually reviewed."},
+    "local_cache_permitted": {"status": "BLOCKED", "evidence": "Retention and local derived-data rights require plan-specific written confirmation."},
+    "revision_retention": {"status": "BLOCKED", "evidence": "No tested vendor revision ledger or immutable re-download comparison exists."},
+    "stable_instrument_identifier": {"status": "VERIFIED", "evidence": "Reference ticker documentation exposes CIK and FIGI identifiers.", "source_url": "https://massive.com/docs/rest/stocks", "verified_at": "2026-07-26T00:00:00Z"},
+    "timezone_defined": {"status": "VERIFIED", "evidence": "Flat-file timestamps are documented as Unix UTC.", "source_url": "https://massive.com/docs/flat-files/stocks/overview", "verified_at": "2026-07-26T00:00:00Z"},
+    "source_timestamp_semantics": {"status": "VERIFIED", "evidence": "Trade and quote feeds document event timestamps and daily file availability.", "source_url": "https://massive.com/docs/flat-files/stocks/overview", "verified_at": "2026-07-26T00:00:00Z"},
+    "delisted_history": {"status": "BLOCKED", "evidence": "The API documents active=false lookup, but purchased-plan historical completeness has not been sampled and reconciled."},
+    "point_in_time_universe": {"status": "BLOCKED", "evidence": "No historical constituent/universe reconstruction has been validated."},
+    "ticker_history": {"status": "BLOCKED", "evidence": "Ticker changes, mergers and reused symbols have not been reconciled against an independent source."},
+    "corporate_action_available_at": {"status": "BLOCKED", "evidence": "Splits/dividends exist, but announcement, ex-date and vendor availability-time semantics have not been qualified."},
+    "raw_unadjusted_prices": {"status": "VERIFIED", "evidence": "Stocks Flat Files are explicitly documented as unadjusted.", "source_url": "https://massive.com/docs/flat-files/stocks/overview", "verified_at": "2026-07-26T00:00:00Z"},
+    "halts_and_no_trade_states": {"status": "BLOCKED", "evidence": "No halt/zero-volume/no-file distinction has been proven for replay."}
+  },
+  "notes": ["Template evidence is not permission to ingest. Re-run after plan purchase, license review and sampled payload reconciliation."]
+}

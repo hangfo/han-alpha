@@ -10,6 +10,7 @@ from hanalpha.execution import ibkr as ibkr_module
 from hanalpha.execution.control_store import DurableExecutionStore
 from hanalpha.execution.ibkr import IBKRBroker
 from hanalpha.execution.ibkr_observer import (
+    CompletedOrdersScope,
     IBKRCallbackCollector,
     IBKRFactBridge,
     IBKRFactReducer,
@@ -352,6 +353,7 @@ class _ObserverFakeApp:
     def __init__(self) -> None:
         self.cancelled_account: int | None = None
         self.disconnected = False
+        self.completed_order_scopes: list[bool] = []
 
     def isConnected(self) -> bool:
         return True
@@ -442,6 +444,16 @@ class _ObserverFakeApp:
             at=NOW,
         )
 
+    def reqCompletedOrders(self, api_only: bool) -> None:
+        assert self.observer
+        self.completed_order_scopes.append(api_only)
+        self.observer.record(
+            IBKRFactType.COMPLETED_ORDER_END,
+            {},
+            identity_key=f"completed:{api_only}",
+            at=NOW,
+        )
+
     def reqPositions(self) -> None:
         assert self.observer and self.observer.barrier
         self.observer.record(
@@ -519,6 +531,8 @@ async def test_observer_has_no_prerequests_drains_and_builds_reconciliation_snap
         )
         assert certificate.complete
         assert certificate.queue_drained
+        assert certificate.visibility.completed_orders_api_only is True
+        assert broker.app.completed_order_scopes == [True]
         assert broker.app.cancelled_account is not None
         assert broker.app.disconnected
         snapshot = IBKRBrokerSnapshotAdapter.build(
@@ -566,6 +580,45 @@ async def test_observer_has_no_prerequests_drains_and_builds_reconciliation_snap
     finally:
         control.close()
         fact_store.close()
+
+
+@pytest.mark.asyncio
+async def test_observer_completed_order_scopes_are_distinct_and_auditable(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(ibkr_module, "ExecutionFilter", lambda: object())
+    broker = object.__new__(IBKRBroker)
+    broker.host = "127.0.0.1"
+    broker.port = 7497
+    broker.client_id = 19
+    broker.account = ACCOUNT
+    broker.app = _ObserverFakeApp()
+    broker.thread = None
+    store = IBKRFactStore(tmp_path / "scope-observer.sqlite3")
+    try:
+        api_certificate, _ = await broker.observe_read_only(
+            store,
+            timeout=0.5,
+            drain_quiet_period=0.01,
+            completed_orders_scope=CompletedOrdersScope.API,
+        )
+        all_certificate, _ = await broker.observe_read_only(
+            store,
+            timeout=0.5,
+            drain_quiet_period=0.01,
+            completed_orders_scope=CompletedOrdersScope.ALL,
+        )
+        assert broker.app.completed_order_scopes == [True, False]
+        assert api_certificate.visibility.completed_orders_api_only is True
+        assert all_certificate.visibility.completed_orders_api_only is False
+        assert not api_certificate.visibility.manual_completed_orders_visible
+        assert all_certificate.visibility.manual_completed_orders_visible
+        assert (
+            api_certificate.visibility.scope_hash
+            != all_certificate.visibility.scope_hash
+        )
+    finally:
+        store.close()
 
 
 @pytest.mark.asyncio

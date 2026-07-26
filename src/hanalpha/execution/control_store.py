@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+from hanalpha.execution.admission import evaluate_quote_admission
 from hanalpha.execution.control_models import (
     BrokerEvent,
     BrokerEventType,
@@ -516,8 +517,6 @@ class DurableExecutionStore:
                 raise ExecutionInvariantError("intent is not approved")
             if expires_at <= at:
                 raise ExecutionInvariantError("approval arm is already expired")
-            if expires_at > at + quote_max_age:
-                raise ExecutionInvariantError("approval arm TTL exceeds quote freshness policy")
             if max_drift_bps > Decimal("10"):
                 raise ExecutionInvariantError("approval arm drift exceeds system policy")
             authority = self.connection.execute(
@@ -553,8 +552,20 @@ class DurableExecutionStore:
             if quote_row is None:
                 raise ExecutionInvariantError("quote snapshot is unknown")
             quote = QuoteSnapshot.model_validate_json(quote_row["quote_json"])
-            quote_age = at - quote.observed_at
-            if quote_age < timedelta(0) or quote_age > quote_max_age:
+            intent = ExecutionIntent.model_validate_json(row["intent_json"])
+            quote_admission = evaluate_quote_admission(
+                quote,
+                at=at,
+                quote_max_age=quote_max_age,
+                provider_clock_skew=provider_clock_skew,
+                max_spread_bps=max_spread_bps,
+                expected_symbol=intent.instrument_id,
+                expected_currency=snapshot.base_currency,
+                reference_limit_price=intent.limit_price,
+                side=intent.side.value,
+                max_drift_bps=max_drift_bps,
+            )
+            if "OBSERVED_QUOTE_STALE" in quote_admission.reasons:
                 self.open_freeze_ticket(
                     "MARKET_QUOTE_STALE",
                     source="approval_arm",
@@ -563,34 +574,34 @@ class DurableExecutionStore:
                 )
                 self.connection.commit()
                 raise ExecutionInvariantError("quote snapshot exceeded maximum age")
-            provider_age = at - quote.provider_timestamp
-            if provider_age < -provider_clock_skew:
-                raise ExecutionInvariantError("quote provider timestamp is in the future")
-            if provider_age > quote_max_age:
-                raise ExecutionInvariantError("quote provider timestamp exceeded maximum age")
-            if quote.provider_timestamp > quote.observed_at + provider_clock_skew:
+            if not quote_admission.eligible:
                 raise ExecutionInvariantError(
-                    "quote provider timestamp exceeds observation clock tolerance"
+                    "quote admission rejected: " + ",".join(quote_admission.reasons)
                 )
-            if quote.feed_mode != "REALTIME":
-                raise ExecutionInvariantError("quote feed is not realtime")
-            intent = ExecutionIntent.model_validate_json(row["intent_json"])
-            if quote.symbol != intent.instrument_id:
-                raise ExecutionInvariantError("quote symbol does not match intent")
-            if quote.venue == "UNKNOWN":
-                raise ExecutionInvariantError("quote venue is not authoritative")
-            if quote.currency != snapshot.base_currency:
-                raise ExecutionInvariantError("quote currency does not match broker authority")
-            if quote.market_phase not in {"REGULAR", "OPEN"}:
-                raise ExecutionInvariantError("quote market phase is not eligible for arming")
-            midpoint = (quote.bid + quote.ask) / Decimal("2")
-            spread_bps = (quote.ask - quote.bid) / midpoint * Decimal("10000")
-            if spread_bps > max_spread_bps:
-                raise ExecutionInvariantError("quote spread exceeds system policy")
             current_limit_price = quote.ask if intent.side.value == "BUY" else quote.bid
-            drift_bps = abs(current_limit_price - intent.limit_price) / intent.limit_price * 10_000
-            if drift_bps > max_drift_bps:
-                raise ExecutionInvariantError("quote drift exceeds approval arm limit")
+            approval = self.connection.execute(
+                "SELECT approval_json FROM operator_approvals WHERE intent_id=?",
+                (intent_id,),
+            ).fetchone()
+            if approval is None:
+                raise ExecutionInvariantError("approval evidence is missing")
+            approval_document = json.loads(approval["approval_json"])
+            reservation = self.connection.execute(
+                "SELECT reservation_json FROM risk_reservations WHERE reservation_id=?",
+                (row["reservation_id"],),
+            ).fetchone()
+            if reservation is None:
+                raise ExecutionInvariantError("intent reservation is missing")
+            reservation_model = RiskReservation.model_validate_json(reservation["reservation_json"])
+            effective_expires_at = min(
+                expires_at,
+                quote_admission.valid_until,
+                datetime.fromisoformat(authority["snapshot_as_of"]) + authority_max_age,
+                reservation_model.expires_at,
+                datetime.fromisoformat(approval_document["approval_expires_at"]),
+            )
+            if effective_expires_at <= at:
+                raise ExecutionInvariantError("upstream evidence expires before Arm can be issued")
             active = self.connection.execute(
                 """SELECT * FROM approval_arms
                    WHERE intent_id=? AND status='ACTIVE'
@@ -606,13 +617,19 @@ class DurableExecutionStore:
                 "approved_limit_price": str(current_limit_price),
                 "max_drift_bps": str(max_drift_bps),
                 "armed_at": at.isoformat(),
-                "expires_at": expires_at.isoformat(),
+                "requested_expires_at": expires_at.isoformat(),
+                "expires_at": effective_expires_at.isoformat(),
                 "intent_spec_hash": canonical_hash(intent),
                 "armed_by": armed_by,
                 "arm_source": arm_source,
                 "operator_session_id": operator_session_id,
-                "provider_age_seconds": provider_age.total_seconds(),
-                "spread_bps": str(spread_bps),
+                "provider_age_seconds": quote_admission.provider_age_seconds,
+                "observed_age_seconds": quote_admission.observed_age_seconds,
+                "spread_bps": str(quote_admission.spread_bps),
+                "quote_max_age_seconds": quote_max_age.total_seconds(),
+                "authority_max_age_seconds": authority_max_age.total_seconds(),
+                "provider_clock_skew_seconds": provider_clock_skew.total_seconds(),
+                "max_spread_bps": str(max_spread_bps),
             }
             if active is not None:
                 existing_document = json.loads(active["arm_json"])
@@ -654,7 +671,7 @@ class DurableExecutionStore:
                     str(current_limit_price),
                     str(max_drift_bps),
                     at.isoformat(),
-                    expires_at.isoformat(),
+                    effective_expires_at.isoformat(),
                     armed_by,
                     arm_source,
                     operator_session_id,
@@ -755,7 +772,7 @@ class DurableExecutionStore:
             ).fetchone()
             if approval is not None:
                 arm = self.connection.execute(
-                    """SELECT arm_id, expires_at FROM approval_arms
+                    """SELECT * FROM approval_arms
                        WHERE intent_id=? AND status='ACTIVE'
                        ORDER BY version DESC LIMIT 1""",
                     (row["intent_id"],),
@@ -769,6 +786,60 @@ class DurableExecutionStore:
                     )
                     self.connection.commit()
                     raise ExecutionInvariantError("approval arm missing or expired")
+                arm_document = json.loads(arm["arm_json"])
+                authority = self.connection.execute(
+                    """SELECT * FROM broker_snapshot_authority
+                       WHERE certificate_id=? AND reconciliation_status='CONVERGED'""",
+                    (arm["authority_id"],),
+                ).fetchone()
+                latest_authority = self.latest_broker_snapshot_authority()
+                quote_row = self.connection.execute(
+                    "SELECT quote_json FROM quote_snapshots WHERE quote_snapshot_id=?",
+                    (arm["quote_snapshot_id"],),
+                ).fetchone()
+                intent_for_gate = ExecutionIntent.model_validate_json(
+                    self._intent_row(row["intent_id"])["intent_json"]
+                )
+                if (
+                    authority is None
+                    or latest_authority is None
+                    or latest_authority["certificate_id"] != arm["authority_id"]
+                    or quote_row is None
+                ):
+                    self.connection.execute(
+                        "UPDATE approval_arms SET status='EXPIRED' WHERE arm_id=?",
+                        (arm["arm_id"],),
+                    )
+                    self.connection.commit()
+                    raise ExecutionInvariantError("approval arm upstream authority changed")
+                authority_snapshot = BrokerSnapshot.model_validate_json(authority["snapshot_json"])
+                claim_quote = QuoteSnapshot.model_validate_json(quote_row["quote_json"])
+                claim_admission = evaluate_quote_admission(
+                    claim_quote,
+                    at=at,
+                    quote_max_age=timedelta(
+                        seconds=float(arm_document["quote_max_age_seconds"])
+                    ),
+                    provider_clock_skew=timedelta(
+                        seconds=float(arm_document["provider_clock_skew_seconds"])
+                    ),
+                    max_spread_bps=Decimal(arm_document["max_spread_bps"]),
+                    expected_symbol=intent_for_gate.instrument_id,
+                    expected_currency=authority_snapshot.base_currency,
+                    reference_limit_price=intent_for_gate.limit_price,
+                    side=intent_for_gate.side.value,
+                    max_drift_bps=Decimal(arm["max_drift_bps"]),
+                )
+                if not claim_admission.eligible:
+                    self.connection.execute(
+                        "UPDATE approval_arms SET status='EXPIRED' WHERE arm_id=?",
+                        (arm["arm_id"],),
+                    )
+                    self.connection.commit()
+                    raise ExecutionInvariantError(
+                        "approval arm evidence expired: "
+                        + ",".join(claim_admission.reasons)
+                    )
             if reservation.expires_at <= at:
                 self.connection.execute(
                     "UPDATE outbox_commands SET status='DELIVERED', delivered_at=? WHERE command_id=?",

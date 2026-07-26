@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.metadata
 import json
 import os
 from datetime import UTC, datetime, timedelta
@@ -17,10 +18,16 @@ from hanalpha.backtest import BacktestEngine
 from hanalpha.config import load_config
 from hanalpha.data.fixtures import run_fixture_pipeline
 from hanalpha.data.synthetic import SyntheticMarketDataProvider
+from hanalpha.execution.burn_in import persist_burn_in_session
 from hanalpha.execution.control_store import DurableExecutionStore
 from hanalpha.execution.fake_broker import DurableFakeBroker
 from hanalpha.execution.ibkr import IBKRBroker
-from hanalpha.execution.ibkr_observer import IBKRFactStore
+from hanalpha.execution.ibkr_observer import CompletedOrdersScope, IBKRFactStore
+from hanalpha.execution.ibkr_preflight import (
+    build_ibkr_preflight,
+    current_git_commit,
+    persist_ibkr_preflight,
+)
 from hanalpha.execution.ibkr_snapshot import IBKRBrokerSnapshotAdapter
 from hanalpha.execution.reconciliation import Reconciler
 from hanalpha.execution.worker import ExecutionWorker
@@ -29,6 +36,12 @@ from hanalpha.experiments.registry import ExperimentRegistry
 from hanalpha.experiments.runner import ExperimentRunner
 from hanalpha.orchestrator import build_system
 from hanalpha.pit.catalog import PITCatalog
+from hanalpha.pit.qualification import (
+    DataSourceProfile,
+    evaluate_source_profile,
+    persist_qualification,
+    vendor_access_preflight,
+)
 from hanalpha.portfolio import Ledger
 from hanalpha.research.adapter import ResearchPolicyAdapter
 from hanalpha.research.protocol import (
@@ -170,8 +183,14 @@ def execution_arm(
 def ibkr_observe(
     state_path: Annotated[Path, typer.Option("--state")],
     control: Annotated[Path, typer.Option("--control")],
-    snapshots: Annotated[int, typer.Option("--snapshots", min=1, max=20)] = 2,
+    snapshots: Annotated[int, typer.Option("--snapshots", min=1, max=100)] = 2,
     timeout: Annotated[float, typer.Option("--timeout", min=1, max=120)] = 15,
+    completed_orders_scope: Annotated[
+        CompletedOrdersScope, typer.Option("--completed-orders-scope")
+    ] = CompletedOrdersScope.API,
+    artifact_root: Annotated[Path, typer.Option("--artifact-root")] = Path(
+        ".state/burn-in"
+    ),
 ) -> None:
     """Capture a read-only IBKR Paper fact tape and completeness certificate."""
 
@@ -194,7 +213,11 @@ def ibkr_observe(
         execution_store = DurableExecutionStore(control)
         try:
             for index in range(snapshots):
-                certificate, model = await broker.observe_read_only(store, timeout=timeout)
+                certificate, model = await broker.observe_read_only(
+                    store,
+                    timeout=timeout,
+                    completed_orders_scope=completed_orders_scope,
+                )
                 try:
                     snapshot = IBKRBrokerSnapshotAdapter.build(
                         model,
@@ -214,6 +237,28 @@ def ibkr_observe(
                     at=datetime.now(UTC),
                     minimum_consensus_interval=timedelta(seconds=1),
                 )
+                server_version = (
+                    int(broker.app.serverVersion())
+                    if hasattr(broker.app, "serverVersion")
+                    else None
+                )
+                try:
+                    ibapi_version = importlib.metadata.version("ibapi")
+                except importlib.metadata.PackageNotFoundError:
+                    ibapi_version = None
+                session_dir = persist_burn_in_session(
+                    source_store=store,
+                    certificate=certificate,
+                    snapshot=snapshot,
+                    output_root=artifact_root,
+                    git_commit=current_git_commit(Path.cwd()),
+                    config_hash=canonical_hash(config),
+                    client_id=secrets.ibkr_client_id,
+                    paper_port=secrets.ibkr_port,
+                    reconciliation_status=report.status,
+                    tws_server_version=server_version,
+                    ibapi_version=ibapi_version,
+                )
                 execution_store.record_heartbeat(
                     "broker-observer",
                     status="OK" if certificate.complete else "ERROR",
@@ -229,6 +274,8 @@ def ibkr_observe(
                     f"complete={str(certificate.complete).lower()} "
                     f"reconciliation={report.status} "
                     f"certificate_id={certificate.certificate_id} "
+                    f"scope={completed_orders_scope.value} "
+                    f"artifact={session_dir} "
                     f"orders={len(model.orders)} executions={len(model.executions)} "
                     f"positions={len(model.positions)}"
                 )
@@ -243,6 +290,54 @@ def ibkr_observe(
     asyncio.run(_run())
 
 
+@app.command("ibkr-burn-in")
+def ibkr_burn_in(
+    state_path: Annotated[Path, typer.Option("--state")],
+    control: Annotated[Path, typer.Option("--control")],
+    sessions: Annotated[int, typer.Option("--sessions", min=1, max=100)] = 30,
+    timeout: Annotated[float, typer.Option("--timeout", min=1, max=120)] = 15,
+    completed_orders_scope: Annotated[
+        CompletedOrdersScope, typer.Option("--completed-orders-scope")
+    ] = CompletedOrdersScope.API,
+    output: Annotated[Path, typer.Option("--output")] = Path(".state/burn-in"),
+) -> None:
+    """Run repeated zero-write Observer sessions with immutable per-session artifacts."""
+
+    ibkr_observe(
+        state_path=state_path,
+        control=control,
+        snapshots=sessions,
+        timeout=timeout,
+        completed_orders_scope=completed_orders_scope,
+        artifact_root=output,
+    )
+
+
+@app.command("ibkr-preflight")
+def ibkr_preflight(
+    output: Annotated[Path, typer.Option("--output")] = Path(".state/ibkr-preflight"),
+    read_only_attested: Annotated[
+        bool, typer.Option("--read-only-attested/--read-only-not-attested")
+    ] = False,
+) -> None:
+    """Create a redacted zero-write IBKR environment preflight artifact."""
+
+    config, secrets = load_config()
+    artifact = build_ibkr_preflight(
+        config,
+        secrets,
+        at=datetime.now(UTC),
+        repository_root=Path.cwd(),
+        read_only_attested=read_only_attested,
+    )
+    destination = output / f"{artifact['artifact_id']}.json"
+    persist_ibkr_preflight(destination, artifact)
+    console.print_json(json.dumps(artifact, sort_keys=True))
+    console.print(f"artifact={destination}")
+    if not artifact["ready"]:
+        raise typer.Exit(code=2)
+
+
 @pit_app.command("ingest-fixture")
 def pit_ingest_fixture(
     fixture: Annotated[Path, typer.Option("--fixture", exists=True, file_okay=False)],
@@ -254,6 +349,35 @@ def pit_ingest_fixture(
         f"snapshot_id={result.snapshot_id} feature_hash={result.feature_hash} "
         f"records={result.record_count}"
     )
+
+
+@pit_app.command("qualify-source")
+def pit_qualify_source(
+    profile_path: Annotated[Path, typer.Option("--profile", exists=True, dir_okay=False)],
+    output: Annotated[Path, typer.Option("--output")],
+) -> None:
+    """Fail closed unless a vendor profile proves all PIT and license requirements."""
+
+    profile = DataSourceProfile.model_validate_json(profile_path.read_text(encoding="utf-8"))
+    report = evaluate_source_profile(profile, at=datetime.now(UTC))
+    persist_qualification(output, report)
+    console.print_json(report.model_dump_json())
+    if report.decision != "QUALIFIED":
+        raise typer.Exit(code=2)
+
+
+@pit_app.command("vendor-preflight")
+def pit_vendor_preflight(
+    output: Annotated[Path, typer.Option("--output")] = Path(
+        ".state/pit/vendor-preflight.json"
+    ),
+) -> None:
+    """Report configured vendor access without exposing any credential value."""
+
+    _, secrets = load_config()
+    artifact = vendor_access_preflight(secrets, at=datetime.now(UTC))
+    persist_qualification(output, artifact)
+    console.print_json(json.dumps(artifact, sort_keys=True))
 
 
 @pit_app.command("quality")

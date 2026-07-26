@@ -367,16 +367,6 @@ def test_arm_requires_persisted_fresh_quote_and_fresh_authority(tmp_path) -> Non
         store.stage(capsule, reservation, intent)
         store.approve(intent.intent_id, actor_id="operator", at=NOW)
         authority_id = _record_authority(store, discriminator="quote-authority")
-        with pytest.raises(ExecutionInvariantError, match="TTL exceeds"):
-            store.arm_approved_intent(
-                intent.intent_id,
-                authority_id=authority_id,
-                quote_snapshot_id=canonical_hash({"quote": "not-yet-loaded"}),
-                max_drift_bps=Decimal("5"),
-                armed_by="operator",
-                at=NOW,
-                expires_at=NOW + timedelta(seconds=6),
-            )
         with pytest.raises(ExecutionInvariantError, match="drift exceeds system policy"):
             store.arm_approved_intent(
                 intent.intent_id,
@@ -511,8 +501,8 @@ def test_active_arm_is_idempotent_then_superseded_by_new_quote(tmp_path) -> None
 @pytest.mark.parametrize(
     ("venue", "currency", "message"),
     [
-        ("UNKNOWN", "USD", "venue is not authoritative"),
-        ("SMART", "EUR", "currency does not match"),
+        ("UNKNOWN", "USD", "VENUE_NOT_AUTHORITATIVE"),
+        ("SMART", "EUR", "CURRENCY_MISMATCH"),
     ],
 )
 def test_arm_rejects_unbound_quote_venue_and_currency(tmp_path, venue, currency, message) -> None:
@@ -580,10 +570,10 @@ def test_legacy_single_arm_schema_migrates_without_losing_receipt(tmp_path) -> N
 @pytest.mark.parametrize(
     ("feed_mode", "provider_offset", "bid", "ask", "message"),
     [
-        ("DELAYED", 0, "100.01", "100.02", "not realtime"),
-        ("REALTIME", -10, "100.01", "100.02", "provider timestamp exceeded"),
-        ("REALTIME", 2, "100.01", "100.02", "timestamp is in the future"),
-        ("REALTIME", 0, "99", "101", "spread exceeds"),
+        ("DELAYED", 0, "100.01", "100.02", "FEED_NOT_REALTIME"),
+        ("REALTIME", -10, "100.01", "100.02", "PROVIDER_QUOTE_STALE"),
+        ("REALTIME", 2, "100.01", "100.02", "PROVIDER_TIMESTAMP_IN_FUTURE"),
+        ("REALTIME", 0, "99", "101", "SPREAD_TOO_WIDE"),
     ],
 )
 def test_arm_rejects_adversarial_quote_freshness_and_spread(
@@ -625,6 +615,48 @@ def test_arm_rejects_adversarial_quote_freshness_and_spread(
                 at=NOW,
                 expires_at=NOW + timedelta(seconds=5),
             )
+    finally:
+        store.close()
+
+
+def test_arm_expiry_propagates_upstream_budget_and_claim_revalidates(tmp_path) -> None:
+    store = DurableExecutionStore(tmp_path / "freshness-budget.sqlite3")
+    capsule, reservation, intent = _contracts(
+        discriminator="freshness-budget", approval_required=True
+    )
+    try:
+        _allow_fixture_staging(store)
+        store.stage(capsule, reservation, intent)
+        store.approve(intent.intent_id, actor_id="approver", at=NOW)
+        authority_id = _record_authority(store, discriminator="freshness-budget")
+        quote_id = _record_quote(store, at=NOW - timedelta(seconds=4))
+        arm_id = store.arm_approved_intent(
+            intent.intent_id,
+            authority_id=authority_id,
+            quote_snapshot_id=quote_id,
+            max_drift_bps=Decimal("5"),
+            armed_by="operator",
+            at=NOW,
+            expires_at=NOW + timedelta(seconds=5),
+        )
+        arm = store.connection.execute(
+            "SELECT expires_at, arm_json FROM approval_arms WHERE arm_id=?", (arm_id,)
+        ).fetchone()
+        assert datetime.fromisoformat(arm["expires_at"]) == NOW + timedelta(seconds=1)
+        assert json.loads(arm["arm_json"])["requested_expires_at"] == (
+            NOW + timedelta(seconds=5)
+        ).isoformat()
+        lease = store.acquire_lease(
+            "broker-writer", owner_id="worker", at=NOW, ttl=timedelta(seconds=10)
+        )
+        with pytest.raises(ExecutionInvariantError, match="missing or expired"):
+            store.claim_next(lease, at=NOW + timedelta(seconds=1))
+        assert (
+            store.connection.execute(
+                "SELECT status FROM approval_arms WHERE arm_id=?", (arm_id,)
+            ).fetchone()[0]
+            == "EXPIRED"
+        )
     finally:
         store.close()
 

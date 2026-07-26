@@ -54,6 +54,12 @@
 - The IBKR adapter is M6 scope and is not validated by the Fake Broker result. Authenticated emergency cancel/flatten remains a direct risk-reducing compatibility path until M6 adds durable cancel commands.
 - M7-B.1 separates the Observer `ObservationWindow` envelope from stable Visibility Scope policy and canonical economic state. Cash/order/position/execution/commission/protection are exact Authority components; NetLiquidation and BuyingPower are bounded valuation observations with an explicit equivalence receipt.
 - Manual approval is immutable, while actor-attributed Arms are versioned, replaceable and consumed atomically with outbox claim. Quote admission requires realtime provider time, bounded spread, eligible market phase and matching symbol/currency evidence.
+- E1 shares one deterministic Quote admission evaluator across Arm and Ops,
+  propagates the earliest Authority/Quote/Approval/Reservation deadline, exports
+  per-session evidence and verifies rather than trusts Safety Case documents.
+- R1 blocks vendor publication until the intended-use license, PIT, revision,
+  timestamp and survivorship profile passes. E1 and R1 are independent evidence
+  streams under the post-M7-B.1 architecture freeze.
 
 ### Control plane
 

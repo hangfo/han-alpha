@@ -1,0 +1,21 @@
+{
+  "schema_version": "pit-source-profile-v1",
+  "source_id": "sec-edgar-filings",
+  "provider": "U.S. Securities and Exchange Commission",
+  "product": "EDGAR submissions and XBRL APIs",
+  "intended_use": "event_backtest",
+  "checks": {
+    "systematic_backtest_license": {"status": "BLOCKED", "evidence": "Public access is documented, but automated-use policy and attribution requirements still need project sign-off."},
+    "local_cache_permitted": {"status": "VERIFIED", "evidence": "SEC publishes nightly bulk submissions and companyfacts archives.", "source_url": "https://www.sec.gov/search-filings/edgar-application-programming-interfaces", "verified_at": "2026-07-26T00:00:00Z"},
+    "revision_retention": {"status": "BLOCKED", "evidence": "Han Alpha has not yet persisted and reconciled amended filings and XBRL fact revisions."},
+    "stable_instrument_identifier": {"status": "VERIFIED", "evidence": "EDGAR APIs are keyed by filer CIK.", "source_url": "https://www.sec.gov/search-filings/edgar-application-programming-interfaces", "verified_at": "2026-07-26T00:00:00Z"},
+    "timezone_defined": {"status": "BLOCKED", "evidence": "Acceptance-time timezone conversion and DST tests have not been run on real payloads."},
+    "source_timestamp_semantics": {"status": "VERIFIED", "evidence": "Submissions history includes filing metadata and APIs update as filings disseminate.", "source_url": "https://www.sec.gov/search-filings/edgar-application-programming-interfaces", "verified_at": "2026-07-26T00:00:00Z"},
+    "public_acceptance_timestamp": {"status": "BLOCKED", "evidence": "Real accession samples have not yet proved the exact strategy-visible available_at mapping."},
+    "original_filing_access": {"status": "VERIFIED", "evidence": "Submissions API and EDGAR archives expose filing history and original documents.", "source_url": "https://www.sec.gov/search-filings/edgar-application-programming-interfaces", "verified_at": "2026-07-26T00:00:00Z"},
+    "amendment_and_revision_lineage": {"status": "BLOCKED", "evidence": "10-K/A, 10-Q/A and XBRL restatement lineage is not implemented."},
+    "cik_point_in_time_mapping": {"status": "BLOCKED", "evidence": "Ticker-to-CIK changes and historical aliases have not been qualified."},
+    "pre_market_after_hours_classification": {"status": "BLOCKED", "evidence": "Acceptance timestamps have not been mapped to authoritative exchange sessions and next tradable bars."}
+  },
+  "notes": ["SEC endpoints require a descriptive User-Agent and compliant request pacing before any live ingestion."]
+}

@@ -1,6 +1,6 @@
 # Han Alpha Trading System
 
-> M7-B.1 status (2026-07-26): cross-session Authority normalization, bounded valuation equivalence, strict Quote admission, re-Arm and read-only Canary reasoning are locally verified. Real IBKR Paper callbacks, 30-session/Golden-Tape/reset burn-in, PIT Alpha evidence and all Paper writes remain blocked. This validates engineering mechanics only—not venue fidelity, production readiness or alpha.
+> Post-M7-B.1 status (2026-07-26): E1 Broker Truth and R1 PIT Data Qualification local entry tooling is implemented. Official IBKR Paper callbacks, vendor-qualified PIT data, Golden-Tape/reset evidence, PIT Alpha and all Paper writes remain blocked. This validates engineering mechanics only—not venue fidelity, production readiness or alpha.
 
 A directly runnable, evidence-grounded trading research and IBKR paper-execution system.
 
@@ -66,7 +66,7 @@ Then visit `http://127.0.0.1:8000/docs`.
 5. Keep `configs/paper.yaml` and a paper-only client ID.
 6. Install the official Python API from the TWS API distribution so `import ibapi` works.
 7. Change `mode` only after adding a real market-data provider; change `execution.broker` to `ibkr` only for paper testing.
-8. First run only `hanalpha ibkr-observe --state .state/ibkr-observer.sqlite3`; do not enable writes until repeated complete snapshots converge.
+8. Run `hanalpha ibkr-preflight --read-only-attested`, then scoped zero-write `ibkr-burn-in`; do not enable writes until E1 and E2 pass.
 
 ## Architecture
 
@@ -96,7 +96,10 @@ hanalpha pit quality --state .state/pit --snapshot <snapshot_id>
 hanalpha pit snapshot --state .state/pit --snapshot <snapshot_id>
 hanalpha execution-reconcile --control <control.sqlite3> --broker-state <fake-broker.sqlite3>
 hanalpha execution-approvals --control <control.sqlite3>
-hanalpha ibkr-observe --state .state/ibkr-observer.sqlite3 --timeout 15
+hanalpha ibkr-preflight --read-only-attested
+hanalpha ibkr-observe --state .state/ibkr-observer.sqlite3 --control .state/execution-control.sqlite3 --completed-orders-scope api --timeout 15
+hanalpha pit vendor-preflight
+hanalpha pit qualify-source --profile configs/data-sources/massive-price-profile.json --output .state/pit/qualifications/massive.json
 hanalpha serve --host 127.0.0.1 --port 8000
 pytest
 ruff check src tests
@@ -122,6 +125,7 @@ This repository includes a complete Codex task package. Start with `CODEX_START_
 - `docs/SECURITY_THREAT_MODEL.md`
 - `docs/TEST_PLAN.md`
 - `docs/IBKR_PAPER_RUNBOOK.md`
+- `docs/BROKER_AND_DATA_ONBOARDING.md`
 - `docs/ROADMAP.md`
 - `docs/VERIFICATION_REPORT.md`
 ### Deterministic research backtest

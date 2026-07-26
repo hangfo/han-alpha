@@ -1,6 +1,6 @@
 # M7-B.1 execution plan: authority normalization and admission
 
-Status: LOCAL COMPLETE; real Paper burn-in and Canary write path BLOCKED
+Status: COMPLETED LOCALLY; external Broker evidence remains BLOCKED
 
 Last updated: 2026-07-26
 

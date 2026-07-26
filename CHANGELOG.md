@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-07-26 — E1/R1 evidence-stream entry
+
+- Added Completed Orders `api/all` Scope execution, redacted zero-write IBKR
+  Preflight, per-session immutable burn-in tapes/certificates/manifests and
+  current-Scope Ops counters.
+- Propagated the earliest Authority/Quote/Approval/Reservation deadline into Arm
+  expiry and revalidated the same quote policy at Claim.
+- Replaced caller-stored Safety Case Booleans with canonical ID, status, expiry,
+  revocation, Scope, evidence-hash and HMAC verification.
+- Added explicit per-layer Heartbeat sets and separated quote evidence eligibility
+  from an unverified intent binding.
+- Added fail-closed Massive, SEC EDGAR and FRED/ALFRED PIT qualification profiles
+  plus redacted vendor credential preflight.
+- Added backup `content_set_hash` and froze post-M7-B.1 architecture expansion
+  under E1/R1/E2/E3/R2 evidence-stream names.
+- Verified 215 Python tests at 85.04% branch-aware coverage, strict mypy over
+  106 source files, package/CLI/API/research smoke checks, frontend tests and
+  production build. No Broker, vendor or LLM request was made.
+
 ## 2026-07-26 — M7-B.1 authority normalization and admission
 
 - Split Observer envelopes from stable visibility policy and canonical broker state.

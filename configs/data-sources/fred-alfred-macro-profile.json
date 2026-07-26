@@ -1,0 +1,20 @@
+{
+  "schema_version": "pit-source-profile-v1",
+  "source_id": "fred-alfred-macro",
+  "provider": "Federal Reserve Bank of St. Louis",
+  "product": "FRED and ALFRED API",
+  "intended_use": "macro_backtest",
+  "checks": {
+    "systematic_backtest_license": {"status": "BLOCKED", "evidence": "Series-level source and copyright restrictions require a selected-series review."},
+    "local_cache_permitted": {"status": "BLOCKED", "evidence": "Local retention rights depend on each underlying series source and have not been reviewed."},
+    "revision_retention": {"status": "VERIFIED", "evidence": "The API exposes vintage dates and real-time periods.", "source_url": "https://fred.stlouisfed.org/docs/api/fred/series_vintagedates.html", "verified_at": "2026-07-26T00:00:00Z"},
+    "stable_instrument_identifier": {"status": "VERIFIED", "evidence": "Macro observations are keyed by stable FRED series IDs.", "source_url": "https://fred.stlouisfed.org/docs/api/fred/index.html", "verified_at": "2026-07-26T00:00:00Z"},
+    "timezone_defined": {"status": "BLOCKED", "evidence": "Release-time timezone and intraday availability policy has not been specified per release."},
+    "source_timestamp_semantics": {"status": "VERIFIED", "evidence": "FRED documents real-time periods and ALFRED vintages.", "source_url": "https://fred.stlouisfed.org/docs/api/fred/realtime_period.html", "verified_at": "2026-07-26T00:00:00Z"},
+    "vintage_observations": {"status": "VERIFIED", "evidence": "ALFRED supports historical vintages rather than only today's revised history.", "source_url": "https://fred.stlouisfed.org/docs/api/fred/fred_vs_alfred.html", "verified_at": "2026-07-26T00:00:00Z"},
+    "release_timestamp_or_conservative_lag": {"status": "BLOCKED", "evidence": "Many series expose dates rather than a safely tradable intraday timestamp; a conservative lag policy is not yet registered."},
+    "revision_dates": {"status": "VERIFIED", "evidence": "series/vintagedates returns dates when values were revised or newly released.", "source_url": "https://fred.stlouisfed.org/docs/api/fred/series_vintagedates.html", "verified_at": "2026-07-26T00:00:00Z"},
+    "series_metadata_history": {"status": "BLOCKED", "evidence": "Historical metadata definition and seasonal-adjustment changes are not yet retained."}
+  },
+  "notes": ["FRED latest values must never substitute for ALFRED vintages in a historical decision."]
+}

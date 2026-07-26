@@ -69,3 +69,19 @@ Before considering alpha credible:
 - parameter perturbation;
 - regime and symbol contribution analysis;
 - comparison with a non-LLM baseline.
+
+## E1 Broker Truth
+
+- `api` and `all` Completed Orders requests generate different Scope hashes;
+- each Observer session exports one isolated tape, certificate and immutable
+  hash-verified manifest;
+- Arm/Claim reject expired Quote, Provider, Authority, Approval or Reservation evidence;
+- unrelated Heartbeats and unsigned Safety Case Booleans cannot satisfy readiness;
+- current-Scope Burn-in never inherits a different Scope's stable count.
+
+## R1 PIT source qualification
+
+- missing license, cache, revision, survivorship or availability-time evidence
+  blocks qualification;
+- credential preflight exposes only configured/not-configured state;
+- initial vendor templates remain BLOCKED until external evidence is attached.
