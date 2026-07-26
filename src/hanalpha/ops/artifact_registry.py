@@ -38,6 +38,7 @@ class ArtifactResolution(BaseModel):
 
     reference: str
     expected_type: ArtifactType
+    required_claim: str | None = None
     hash_present: bool
     artifact_found: bool
     artifact_hash_valid: bool
@@ -155,7 +156,13 @@ class ArtifactRegistry:
             )
         return artifact_id
 
-    def resolve(self, reference: str, *, expected_type: ArtifactType) -> ArtifactResolution:
+    def resolve(
+        self,
+        reference: str,
+        *,
+        expected_type: ArtifactType,
+        required_claim: str | None = None,
+    ) -> ArtifactResolution:
         reasons: list[str] = []
         hash_present = _is_hash(reference)
         row = (
@@ -173,6 +180,7 @@ class ArtifactRegistry:
             return ArtifactResolution(
                 reference=reference,
                 expected_type=expected_type,
+                required_claim=required_claim,
                 hash_present=hash_present,
                 artifact_found=False,
                 artifact_hash_valid=False,
@@ -199,6 +207,9 @@ class ArtifactRegistry:
                 policy_passed = row["status"] == "VERIFIED" and _policy_passed(
                     document, expected_type
                 )
+                if required_claim and required_claim not in document.get("qualifies_checks", []):
+                    policy_passed = False
+                    reasons.append("ARTIFACT_CLAIM_MISMATCH")
             except (OSError, ValueError, json.JSONDecodeError):
                 reasons.append("ARTIFACT_DOCUMENT_INVALID")
         if not schema_valid:
@@ -208,6 +219,7 @@ class ArtifactRegistry:
         return ArtifactResolution(
             reference=reference,
             expected_type=expected_type,
+            required_claim=required_claim,
             hash_present=hash_present,
             artifact_found=artifact_found,
             artifact_hash_valid=hash_valid,
@@ -216,6 +228,55 @@ class ArtifactRegistry:
             reasons=tuple(sorted(set(reasons))),
             path=str(path),
         )
+
+    def latest_verified_document(self, artifact_type: ArtifactType) -> dict[str, Any] | None:
+        rows = self.connection.execute(
+            """SELECT artifact_id FROM evidence_artifacts
+               WHERE artifact_type=? AND status='VERIFIED'
+               ORDER BY created_at DESC""",
+            (artifact_type.value,),
+        ).fetchall()
+        for row in rows:
+            resolution = self.resolve(str(row["artifact_id"]), expected_type=artifact_type)
+            if resolution.verified and resolution.path:
+                return _read_json(Path(resolution.path))
+        return None
+
+    def ops_summary(self, *, limit: int = 20) -> dict[str, Any]:
+        rows = self.connection.execute(
+            """SELECT artifact_id, artifact_type, schema_version, created_at, status
+               FROM evidence_artifacts ORDER BY created_at DESC"""
+        ).fetchall()
+        type_counts: dict[str, int] = {}
+        status_counts: dict[str, int] = {}
+        recent: list[dict[str, Any]] = []
+        verified_count = 0
+        for row in rows:
+            artifact_type = ArtifactType(str(row["artifact_type"]))
+            resolution = self.resolve(str(row["artifact_id"]), expected_type=artifact_type)
+            type_counts[artifact_type.value] = type_counts.get(artifact_type.value, 0) + 1
+            status = str(row["status"])
+            status_counts[status] = status_counts.get(status, 0) + 1
+            verified_count += int(resolution.verified)
+            if len(recent) < limit:
+                recent.append(
+                    {
+                        "artifact_id": row["artifact_id"],
+                        "artifact_type": artifact_type,
+                        "schema_version": row["schema_version"],
+                        "created_at": row["created_at"],
+                        "status": status,
+                        "verified": resolution.verified,
+                        "reasons": list(resolution.reasons),
+                    }
+                )
+        return {
+            "total": len(rows),
+            "verified": verified_count,
+            "type_counts": type_counts,
+            "status_counts": status_counts,
+            "recent": recent,
+        }
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -231,6 +292,7 @@ def _schema_valid(document: dict[str, Any], artifact_type: ArtifactType) -> bool
         ArtifactType.BURN_IN_SESSION: "ibkr-burn-in-session-",
         ArtifactType.BURN_IN_CORPUS: "ibkr-burn-in-corpus-",
         ArtifactType.IBKR_PREFLIGHT: "ibkr-zero-write-preflight-",
+        ArtifactType.GOLDEN_TAPE: "ibkr-golden-tape-",
     }
     prefix = expected_prefixes.get(artifact_type)
     if prefix and not schema.startswith(prefix):
@@ -255,6 +317,16 @@ def _policy_passed(document: dict[str, Any], artifact_type: ArtifactType) -> boo
         return document.get("decision") == "PASS"
     if artifact_type is ArtifactType.IBKR_PREFLIGHT:
         return document.get("ready") is True and document.get("write_capability") is False
+    if artifact_type is ArtifactType.RAW_SAMPLE_MANIFEST:
+        return (
+            document.get("schema_version") == "pit-raw-sample-manifest-v1"
+            and document.get("decision") == "PASS"
+            and document.get("bounded") is True
+            and document.get("all_http_success") is True
+            and document.get("secrets_redacted") is True
+            and isinstance(document.get("responses"), list)
+            and bool(document["responses"])
+        )
     return document.get("decision") in {"PASS", "APPROVE", "APPROVED", "VERIFIED"}
 
 

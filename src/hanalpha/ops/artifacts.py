@@ -26,6 +26,17 @@ def write_immutable_json(path: Path, document: dict[str, Any]) -> None:
         if path.read_bytes() != encoded:
             raise FileExistsError(f"immutable artifact already exists with different bytes: {path}")
         return
+    write_immutable_bytes(path, encoded)
+
+
+def write_immutable_bytes(path: Path, encoded: bytes) -> None:
+    """Atomically create or idempotently confirm one immutable byte artifact."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        if path.read_bytes() != encoded:
+            raise FileExistsError(f"immutable artifact already exists with different bytes: {path}")
+        return
     temporary = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
     temporary.write_bytes(encoded)
     _fsync(temporary)

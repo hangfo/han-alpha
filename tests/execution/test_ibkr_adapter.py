@@ -10,7 +10,13 @@ import pytest
 import hanalpha.execution.ibkr as ibkr_module
 from hanalpha.domain.enums import OrderStatus, Side
 from hanalpha.domain.models import OrderEvent, OrderRequest, Position, Quote
-from hanalpha.execution.ibkr import IBAPI_AVAILABLE, IBKRBroker, _IBApp, canonical_account_count
+from hanalpha.execution.ibkr import (
+    IBAPI_AVAILABLE,
+    IBKRBroker,
+    _IBApp,
+    _ObserverOnlyIBApp,
+    canonical_account_count,
+)
 from hanalpha.execution.ibkr_observer import (
     IBKRCallbackCollector,
     IBKRFactStore,
@@ -19,6 +25,18 @@ from hanalpha.execution.ibkr_observer import (
 )
 
 NOW = datetime(2024, 1, 1, tzinfo=UTC)
+
+
+def test_observer_only_app_structurally_rejects_broker_writes() -> None:
+    app = _ObserverOnlyIBApp()
+    for call in (
+        lambda: app.placeOrder(1, object(), object()),
+        lambda: app.cancelOrder(1),
+        app.reqGlobalCancel,
+        lambda: app.exerciseOptions(1, object(), 1, 1, "DU", 0),
+    ):
+        with pytest.raises(PermissionError, match="observer-only"):
+            call()
 
 
 def test_ibapp_callbacks_normalize_redact_and_preserve_order_state(tmp_path) -> None:

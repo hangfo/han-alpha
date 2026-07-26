@@ -79,6 +79,10 @@ Before considering alpha credible:
   idempotent full-document equality reject tampering;
 - Corpus evaluation rejects mixed bindings, incomplete Sessions, fact drops,
   unstable consensus and missing Scope-specific restart/order coverage;
+- Observer-only clients reject order placement, cancel, global cancel and option
+  exercise even during the separately attested order-visibility phase;
+- Golden Tape callback reorder, duplicate, delay, redundancy and overlap
+  transforms preserve canonical state or fail the Corpus explicitly;
 - Arm/Claim reject expired Quote, Provider, Authority, Approval or Reservation evidence;
 - unrelated Heartbeats and unsigned Safety Case Booleans cannot satisfy readiness;
 - current-Scope Burn-in never inherits a different Scope's stable count.
@@ -90,4 +94,9 @@ Before considering alpha credible:
 - credential preflight exposes only configured/not-configured state;
 - placeholder SEC identification, self-reported VERIFIED checks, missing/expired
   artifacts and absent/invalid reviewer signatures fail closed;
+- matching only an Artifact type without the exact `qualifies_checks` claim fails;
+- bounded SEC/Massive/FRED probes redact keys, bind raw payload hashes and reject
+  excessive scope or malformed provider responses;
+- derived Timestamp/Revision/Symbology/Survivorship audits retain unresolved
+  availability semantics as BLOCKED;
 - initial vendor templates remain BLOCKED until external evidence is attached.

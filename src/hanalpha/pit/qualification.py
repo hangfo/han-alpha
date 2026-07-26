@@ -168,7 +168,11 @@ def evaluate_source_profile(
             artifact_reasons.append("ARTIFACT_REGISTRY_UNAVAILABLE")
         else:
             for artifact_id in evidence.artifact_ids:
-                resolution = registry.resolve(artifact_id, expected_type=CHECK_ARTIFACT_TYPES[code])
+                resolution = registry.resolve(
+                    artifact_id,
+                    expected_type=CHECK_ARTIFACT_TYPES[code],
+                    required_claim=code,
+                )
                 if not resolution.verified:
                     verified_artifacts = False
                     artifact_reasons.extend(resolution.reasons)

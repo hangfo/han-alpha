@@ -1,6 +1,9 @@
 # Han Alpha Trading System
 
-> Post-M7-B.1 status (2026-07-26): E1 Broker Truth and R1 PIT Data Qualification local entry tooling is implemented. Official IBKR Paper callbacks, vendor-qualified PIT data, Golden-Tape/reset evidence, PIT Alpha and all Paper writes remain blocked. This validates engineering mechanics only—not venue fidelity, production readiness or alpha.
+> E1-B/R1-B local tooling status (2026-07-26): observer writes are structurally
+> blocked, Artifact/Claim resolution, Golden-Tape replay, bounded real-source
+> probes and Evidence/Corpus dashboards are implemented. Official IBKR callbacks,
+> licensed PIT data, external review, Alpha and every Paper write remain blocked.
 
 A directly runnable, evidence-grounded trading research and IBKR paper-execution system.
 
@@ -66,7 +69,10 @@ Then visit `http://127.0.0.1:8000/docs`.
 5. Keep `configs/paper.yaml` and a paper-only client ID.
 6. Install the official Python API from the TWS API distribution so `import ibapi` works.
 7. Change `mode` only after adding a real market-data provider; change `execution.broker` to `ibkr` only for paper testing.
-8. Run `hanalpha ibkr-preflight --read-only-attested`, scoped zero-write
+8. Run `hanalpha ibkr-preflight --read-only-attested` for account facts. IBKR
+   Read-Only hides order information, so the separate manual-order matrix uses
+   `--order-visibility-attested` with Han Alpha's structurally write-blocked
+   observer. Run scoped zero-write
    `ibkr-burn-in` captures, and `ibkr-burn-in-evaluate`; do not enable writes
    until E1-B and E2 pass.
 
@@ -105,6 +111,9 @@ hanalpha execution-approvals --control <control.sqlite3>
 hanalpha ibkr-preflight --read-only-attested
 hanalpha ibkr-observe --state .state/ibkr-observer.sqlite3 --control .state/execution-control.sqlite3 --completed-orders-scope api --timeout 15
 hanalpha pit vendor-preflight
+hanalpha pit probe-source --source sec_edgar --identifier 320193 --output .state/pit/probes/sec
+hanalpha pit audit-probe --manifest <probe-manifest.json> --output .state/pit/audits
+hanalpha pit evidence-list
 hanalpha pit qualify-source --profile configs/data-sources/massive-price-profile.json --output .state/pit/qualifications/massive
 hanalpha serve --host 127.0.0.1 --port 8000
 pytest

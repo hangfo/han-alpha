@@ -87,6 +87,7 @@
 ./docs/v2-plan/16_M7B_REVIEW_AND_M7B1_DECISIONS_ZH.md
 ./docs/v2-plan/17_M7B1_REVIEW_AND_E1_R1_DECISIONS_ZH.md
 ./docs/v2-plan/18_E1_R1_REVIEW_AND_EVIDENCE_AUTHORITY_ZH.md
+./docs/v2-plan/19_E1B_R1B_WEB_REVIEW_AND_REALITY_GAPS_ZH.md
 ./docs/v2-plan/README.md
 ./infra/docker-compose.yml
 ./pyproject.toml
@@ -136,6 +137,7 @@
 ./src/hanalpha/execution/control_models.py
 ./src/hanalpha/execution/control_store.py
 ./src/hanalpha/execution/fake_broker.py
+./src/hanalpha/execution/golden_tape.py
 ./src/hanalpha/execution/ibkr.py
 ./src/hanalpha/execution/ibkr_observer.py
 ./src/hanalpha/execution/ibkr_preflight.py
@@ -172,6 +174,8 @@
 ./src/hanalpha/pit/quality.py
 ./src/hanalpha/pit/raw_store.py
 ./src/hanalpha/pit/repository.py
+./src/hanalpha/pit/source_audit.py
+./src/hanalpha/pit/source_probe.py
 ./src/hanalpha/pit/symbology.py
 ./src/hanalpha/portfolio/__init__.py
 ./src/hanalpha/portfolio/ledger.py
@@ -251,6 +255,7 @@
 ./tests/pit/test_quality.py
 ./tests/pit/test_raw_catalog.py
 ./tests/pit/test_repository.py
+./tests/pit/test_source_probe.py
 ./tests/pit/test_time.py
 ./tests/research/__init__.py
 ./tests/research/conftest.py

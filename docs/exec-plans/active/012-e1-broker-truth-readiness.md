@@ -29,12 +29,22 @@ capability.
   Scope-specific session and scenario matrix passes.
 - Runtime holds Ed25519 public keys only; Risk and Execution reviewer receipts
   must be independent and bind the exact Safety Case.
+- The Observer uses a dedicated client that rejects `placeOrder`, `cancelOrder`,
+  `reqGlobalCancel` and `exerciseOptions`, even if TWS Read-Only must be disabled
+  for the separately attested ALL-Scope order-visibility phase.
+- Preflight and Session Manifests register automatically. Golden Tape evaluation
+  executes metamorphic callback transforms and emits a machine-readable Callback
+  Truth Map plus a content-addressed corpus.
+- Ops and the read-only Dashboard use Artifact Registry and Corpus evidence rather
+  than hard-coded restart/Golden Tape counters.
 
 ## External sequence
 
 1. Install matching official stable TWS/IB Gateway and TWS API.
 2. Set Paper account, port, client ID and base currency locally.
-3. Keep API Read-Only enabled and record the operator attestation.
+3. Keep API Read-Only enabled for account/position captures. Disable it only for
+   the distinct manual-order visibility phase, while retaining the observer-only
+   client, and record the matching operator attestation.
 4. Pass `ibkr-preflight`.
 5. Capture the preregistered `api` Scope matrix with explicit
    `--capture-scenario` labels; evaluate it separately.

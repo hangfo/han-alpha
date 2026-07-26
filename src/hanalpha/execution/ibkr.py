@@ -326,6 +326,26 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
         self._observe(IBKRFactType.DISCONNECT, {}, key="closed")
 
 
+class _ObserverOnlyIBApp(_IBApp):
+    """IBKR callback client whose order-mutating methods are structurally disabled."""
+
+    @staticmethod
+    def _writes_forbidden() -> None:
+        raise PermissionError("observer-only IBKR client cannot call a broker write method")
+
+    def placeOrder(self, *args: Any, **kwargs: Any) -> None:
+        self._writes_forbidden()
+
+    def cancelOrder(self, *args: Any, **kwargs: Any) -> None:
+        self._writes_forbidden()
+
+    def reqGlobalCancel(self, *args: Any, **kwargs: Any) -> None:
+        self._writes_forbidden()
+
+    def exerciseOptions(self, *args: Any, **kwargs: Any) -> None:
+        self._writes_forbidden()
+
+
 def canonical_account_count(accounts: list[str]) -> str:
     """Redacted identity: never persist account identifiers in the observer tape."""
     return f"accounts:{len(accounts)}"
@@ -346,6 +366,7 @@ class IBKRBroker:
         client_id: int,
         account: str | None = None,
         base_currency: str = "USD",
+        observer_only: bool = False,
     ) -> None:
         if not IBAPI_AVAILABLE:
             raise RuntimeError(
@@ -357,7 +378,8 @@ class IBKRBroker:
         self.client_id = client_id
         self.account = account
         self.base_currency = base_currency
-        self.app = _IBApp()
+        self.observer_only = observer_only
+        self.app = _ObserverOnlyIBApp() if observer_only else _IBApp()
         self.thread: threading.Thread | None = None
         self._idempotency: dict[str, int] = {}
 

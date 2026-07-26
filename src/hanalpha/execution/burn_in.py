@@ -254,6 +254,8 @@ def evaluate_burn_in_corpus(
         manifests.append(verification.manifest)
     api_only_values = {item.get("completed_orders_api_only") for item in manifests}
     api_only = next(iter(api_only_values)) if len(api_only_values) == 1 else None
+    if len(api_only_values) > 1:
+        reasons.append("MIXED_COMPLETED_ORDERS_SCOPE")
     threshold = minimum_sessions if minimum_sessions is not None else (30 if api_only else 10)
     coverage_requirements = required_coverage or (
         API_SCOPE_COVERAGE if api_only is True else ALL_SCOPE_COVERAGE

@@ -32,6 +32,13 @@ evidence by itself.
   `PROMOTION_QUALIFIED`; strategy promotion accepts only the latter.
 - Vendor Preflight reports credential presence only. It never labels a source
   access-ready without license and entitlement evidence.
+- Bounded live Probe commands preserve redacted, immutable SEC/Massive/FRED
+  payloads and their observed/effective/ingested semantics.
+- Probe audits produce typed, content-addressed Timestamp, Revision, Symbology
+  and Survivorship evidence without converting unresolved availability semantics
+  into PASS.
+- Every Artifact must declare the exact `qualifies_checks` it supports; matching
+  only the broad Artifact type is insufficient.
 
 ## Next external work
 

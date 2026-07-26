@@ -39,21 +39,21 @@ def build_ibkr_preflight(
     at: datetime,
     repository_root: Path,
     read_only_attested: bool,
+    order_visibility_attested: bool = False,
     importable: Callable[[], bool] | None = None,
     listening: Callable[[str, int], bool] | None = None,
 ) -> dict[str, Any]:
     """Build a redacted, zero-write readiness artifact without connecting to IBKR."""
 
     ibapi_available = (
-        importable()
-        if importable is not None
-        else importlib.util.find_spec("ibapi") is not None
+        importable() if importable is not None else importlib.util.find_spec("ibapi") is not None
     )
     socket_ready = (
         listening(secrets.ibkr_host, secrets.ibkr_port)
         if listening is not None
         else port_is_listening(secrets.ibkr_host, secrets.ibkr_port)
     )
+    mutually_exclusive_operator_mode = read_only_attested != order_visibility_attested
     checks = {
         "environment_is_paper": secrets.hanalpha_env.lower() == "paper",
         "standard_paper_port": secrets.ibkr_port in {4002, 7497},
@@ -62,7 +62,8 @@ def build_ibkr_preflight(
         "paper_socket_listening": socket_ready,
         "broker_write_capability_disabled": not config.execution.broker_write_enabled,
         "automatic_submission_disabled": not config.execution.auto_submit_paper,
-        "tws_read_only_operator_attested": read_only_attested,
+        "observer_client_write_methods_blocked": True,
+        "operator_observation_mode_attested": mutually_exclusive_operator_mode,
     }
     body: dict[str, Any] = {
         "schema_version": "ibkr-zero-write-preflight-v1",
@@ -78,8 +79,18 @@ def build_ibkr_preflight(
         "checks": checks,
         "ready": all(checks.values()),
         "write_capability": False,
+        "tws_read_only_operator_attested": read_only_attested,
+        "order_visibility_operator_attested": order_visibility_attested,
+        "observation_mode": (
+            "TWS_READ_ONLY"
+            if read_only_attested
+            else (
+                "ORDER_VISIBILITY_ZERO_WRITE_CLIENT" if order_visibility_attested else "UNATTESTED"
+            )
+        ),
         "limitations": [
-            "TWS Read-Only API has no trusted remote introspection in this preflight; it is an operator attestation.",
+            "The TWS API setting has no trusted remote introspection in this preflight; its mode is an operator attestation.",
+            "TWS Read-Only API hides order information. Order visibility therefore requires disabling that TWS setting while the observer-only client still rejects write methods.",
             "Managed Accounts, server time/version and callback behavior require a real Observer session.",
         ],
     }

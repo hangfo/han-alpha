@@ -10,7 +10,7 @@ from hanalpha.execution.control_models import BrokerSnapshot, QuoteSnapshot
 from hanalpha.execution.control_store import DurableExecutionStore
 from hanalpha.execution.ibkr_observer import IBKRFactStore
 from hanalpha.execution.safety_case import SafetyCaseVerification, verify_safety_case
-from hanalpha.ops.artifact_registry import ArtifactRegistry
+from hanalpha.ops.artifact_registry import ArtifactRegistry, ArtifactType
 
 
 class OpsService:
@@ -216,6 +216,17 @@ class OpsService:
             quote_evidence_eligible=bool(quote_admission is not None and quote_admission.eligible),
             safety_case_verification=safety_verification,
         )
+        evidence_registry = self.artifact_registry.ops_summary() if self.artifact_registry else None
+        burn_in_corpus = (
+            self.artifact_registry.latest_verified_document(ArtifactType.BURN_IN_CORPUS)
+            if self.artifact_registry
+            else None
+        )
+        golden_tape_corpus = (
+            self.artifact_registry.latest_verified_document(ArtifactType.GOLDEN_TAPE)
+            if self.artifact_registry
+            else None
+        )
         if selected_scope:
             vote_counts = {
                 str(row["disposition"]): int(row["count"])
@@ -282,6 +293,14 @@ class OpsService:
             "discrepancies": discrepancies,
             "heartbeats": heartbeats,
             "backup": self._backup_summary(heartbeats),
+            "evidence_registry": evidence_registry
+            or {
+                "total": 0,
+                "verified": 0,
+                "type_counts": {},
+                "status_counts": {},
+                "recent": [],
+            },
             "burn_in": {
                 "scope_hash": selected_scope,
                 "scope_policy": observer.get("scope_policy"),
@@ -298,14 +317,28 @@ class OpsService:
                 "divergent_resets": vote_counts.get("ACCEPTED_DIVERGENT_RESET", 0),
                 "non_independent_rejections": vote_counts.get("REJECTED_NON_INDEPENDENT", 0),
                 "target_sessions": 30,
-                "process_restarts": 0,
+                "process_restarts": int(
+                    (burn_in_corpus or {}).get("coverage_counts", {}).get("process_restart", 0)
+                ),
                 "target_process_restarts": 3,
-                "tws_restarts": 0,
+                "tws_restarts": int(
+                    (burn_in_corpus or {}).get("coverage_counts", {}).get("tws_restart", 0)
+                ),
                 "target_tws_restarts": 2,
-                "nightly_resets": 0,
+                "nightly_resets": int(
+                    (burn_in_corpus or {}).get("coverage_counts", {}).get("nightly_reset", 0)
+                ),
                 "target_nightly_resets": 1,
-                "golden_tapes": 0,
-                "target_golden_tapes": 10,
+                "golden_tapes": len((golden_tape_corpus or {}).get("observed_scenarios", [])),
+                "target_golden_tapes": 14,
+                "corpus_decision": (burn_in_corpus or {}).get("decision", "NOT_AVAILABLE"),
+                "corpus_reasons": (burn_in_corpus or {}).get("reasons", []),
+                "coverage_counts": (burn_in_corpus or {}).get("coverage_counts", {}),
+                "coverage_requirements": (burn_in_corpus or {}).get("coverage_requirements", {}),
+                "golden_tape_decision": (golden_tape_corpus or {}).get("decision", "NOT_AVAILABLE"),
+                "golden_tape_transform_coverage": (golden_tape_corpus or {}).get(
+                    "transform_coverage", {}
+                ),
                 "vote_dispositions": vote_counts,
                 "all_scope_vote_dispositions": all_scope_vote_counts,
                 "last_reset_reason": (

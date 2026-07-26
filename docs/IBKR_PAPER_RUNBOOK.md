@@ -13,7 +13,7 @@
 9. Run `hanalpha doctor` and the test suite.
 10. Run repeated zero-write Observer sessions before considering any order.
 
-## Read-only burn-in sequence
+## Zero-write burn-in sequence
 
 - Start TWS/IB Gateway and authenticate with supported 2FA.
 - Run scoped `hanalpha ibkr-burn-in` captures with explicit
@@ -26,9 +26,16 @@
 - Test Completed Orders twice: `--completed-orders-scope api` for Han Alpha/API
   scope, then `--completed-orders-scope all` for manually submitted TWS order
   visibility. Treat them as different Scope hashes and separate Burn-in counters.
+- IBKR documents that TWS Read-Only hides order information. Keep it enabled for
+  account/position-only captures. For the explicit order-visibility matrix, disable
+  that TWS setting, run `ibkr-preflight --order-visibility-attested`, and use only
+  Han Alpha's observer-only client. Its write methods are structurally blocked.
 - Preserve each generated `manifest.json`, `certificate.json` and `tape.sqlite3`.
 - Restart the process and TWS/Gateway, then repeat across a reset boundary.
 - Replay the fact tape and require the same reduced account/order/position/execution state.
+- Run `ibkr-golden-tape-evaluate`; require callback reorder, duplicate, delayed
+  commission/correction, redundant-status removal and open/completed overlap
+  transform coverage across the corpus.
 - Check `/health` and `/status`.
 - Compare account values with TWS manually.
 - Compare positions and open orders.

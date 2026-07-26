@@ -25,6 +25,7 @@ from hanalpha.execution.burn_in import (
 )
 from hanalpha.execution.control_store import DurableExecutionStore
 from hanalpha.execution.fake_broker import DurableFakeBroker
+from hanalpha.execution.golden_tape import evaluate_golden_tape_corpus
 from hanalpha.execution.ibkr import IBKRBroker
 from hanalpha.execution.ibkr_observer import CompletedOrdersScope, IBKRFactStore
 from hanalpha.execution.ibkr_preflight import (
@@ -47,6 +48,12 @@ from hanalpha.pit.qualification import (
     evaluate_source_profile,
     persist_qualification,
     vendor_access_preflight,
+)
+from hanalpha.pit.source_audit import audit_probe_manifest
+from hanalpha.pit.source_probe import (
+    ProbeSource,
+    SourceProbeError,
+    run_bounded_source_probe,
 )
 from hanalpha.portfolio import Ledger
 from hanalpha.research.adapter import ResearchPolicyAdapter
@@ -196,6 +203,9 @@ def ibkr_observe(
     ] = CompletedOrdersScope.API,
     artifact_root: Annotated[Path, typer.Option("--artifact-root")] = Path(".state/burn-in"),
     capture_scenario: Annotated[str, typer.Option("--capture-scenario")] = ("repeated_connection"),
+    registry_path: Annotated[Path, typer.Option("--registry")] = Path(
+        ".state/evidence-artifacts.sqlite3"
+    ),
 ) -> None:
     """Capture a read-only IBKR Paper fact tape and completeness certificate."""
 
@@ -213,9 +223,11 @@ def ibkr_observe(
             client_id=secrets.ibkr_client_id,
             account=secrets.ibkr_account,
             base_currency=config.base_currency,
+            observer_only=True,
         )
         store = IBKRFactStore(state_path)
         execution_store = DurableExecutionStore(control)
+        registry = ArtifactRegistry(registry_path)
         try:
             for index in range(snapshots):
                 certificate, model = await broker.observe_read_only(
@@ -289,6 +301,16 @@ def ibkr_observe(
                     ),
                     capture_scenario=capture_scenario,
                 )
+                manifest = json.loads((session_dir / "manifest.json").read_text(encoding="utf-8"))
+                registry.register(
+                    session_dir / "manifest.json",
+                    artifact_type=ArtifactType.BURN_IN_SESSION,
+                    status="VERIFIED" if manifest["safety_case_eligible"] else "CAPTURED",
+                    git_commit=manifest.get("git_commit"),
+                    config_hash=manifest.get("config_hash"),
+                    scope_hash=manifest.get("scope_hash"),
+                    account_hash=manifest.get("account_hash"),
+                )
                 execution_store.record_heartbeat(
                     "broker-observer",
                     status="OK" if certificate.complete else "ERROR",
@@ -316,6 +338,7 @@ def ibkr_observe(
                 broker.app.disconnect()
             store.close()
             execution_store.close()
+            registry.close()
 
     asyncio.run(_run())
 
@@ -331,6 +354,9 @@ def ibkr_burn_in(
     ] = CompletedOrdersScope.API,
     output: Annotated[Path, typer.Option("--output")] = Path(".state/burn-in"),
     capture_scenario: Annotated[str, typer.Option("--capture-scenario")] = ("repeated_connection"),
+    registry_path: Annotated[Path, typer.Option("--registry")] = Path(
+        ".state/evidence-artifacts.sqlite3"
+    ),
 ) -> None:
     """Capture repeated zero-write Observer sessions; this does not imply acceptance."""
 
@@ -342,6 +368,7 @@ def ibkr_burn_in(
         completed_orders_scope=completed_orders_scope,
         artifact_root=output,
         capture_scenario=capture_scenario,
+        registry_path=registry_path,
     )
 
 
@@ -373,12 +400,46 @@ def ibkr_burn_in_evaluate(
         raise typer.Exit(code=2)
 
 
+@app.command("ibkr-golden-tape-evaluate")
+def ibkr_golden_tape_evaluate(
+    input_root: Annotated[Path, typer.Option("--input", exists=True, file_okay=False)],
+    output: Annotated[Path, typer.Option("--output")],
+    registry_path: Annotated[Path, typer.Option("--registry")] = Path(
+        ".state/evidence-artifacts.sqlite3"
+    ),
+) -> None:
+    """Replay the preregistered Golden Tape matrix and emit a callback truth map."""
+
+    session_dirs = tuple(path for path in (input_root / "sessions").iterdir() if path.is_dir())
+    report = evaluate_golden_tape_corpus(session_dirs)
+    write_immutable_json(output, report)
+    registry = ArtifactRegistry(registry_path)
+    try:
+        registry.register(
+            output,
+            artifact_type=ArtifactType.GOLDEN_TAPE,
+            status="VERIFIED" if report["decision"] == "PASS" else "REJECTED",
+        )
+    finally:
+        registry.close()
+    console.print_json(json.dumps(report, sort_keys=True))
+    if report["decision"] != "PASS":
+        raise typer.Exit(code=2)
+
+
 @app.command("ibkr-preflight")
 def ibkr_preflight(
     output: Annotated[Path, typer.Option("--output")] = Path(".state/ibkr-preflight"),
     read_only_attested: Annotated[
         bool, typer.Option("--read-only-attested/--read-only-not-attested")
     ] = False,
+    order_visibility_attested: Annotated[
+        bool,
+        typer.Option("--order-visibility-attested/--order-visibility-not-attested"),
+    ] = False,
+    registry_path: Annotated[Path, typer.Option("--registry")] = Path(
+        ".state/evidence-artifacts.sqlite3"
+    ),
 ) -> None:
     """Create a redacted zero-write IBKR environment preflight artifact."""
 
@@ -389,11 +450,24 @@ def ibkr_preflight(
         at=datetime.now(UTC),
         repository_root=Path.cwd(),
         read_only_attested=read_only_attested,
+        order_visibility_attested=order_visibility_attested,
     )
     destination = output / f"{artifact['artifact_id']}.json"
     persist_ibkr_preflight(destination, artifact)
+    registry = ArtifactRegistry(registry_path)
+    try:
+        registered_id = registry.register(
+            destination,
+            artifact_type=ArtifactType.IBKR_PREFLIGHT,
+            status="VERIFIED" if artifact["ready"] else "REJECTED",
+            git_commit=artifact.get("git_commit"),
+            config_hash=artifact.get("config_hash"),
+            account_hash=artifact.get("account_hash"),
+        )
+    finally:
+        registry.close()
     console.print_json(json.dumps(artifact, sort_keys=True))
-    console.print(f"artifact={destination}")
+    console.print(f"artifact={destination} registry_id={registered_id}")
     if not artifact["ready"]:
         raise typer.Exit(code=2)
 
@@ -461,6 +535,132 @@ def pit_vendor_preflight(
     persist_qualification(destination, artifact)
     console.print_json(json.dumps(artifact, sort_keys=True))
     console.print(f"artifact={destination}")
+
+
+@pit_app.command("probe-source")
+def pit_probe_source(
+    source: Annotated[ProbeSource, typer.Option("--source")],
+    identifier: Annotated[list[str], typer.Option("--identifier")],
+    output: Annotated[Path, typer.Option("--output")],
+    registry_path: Annotated[Path, typer.Option("--registry")] = Path(
+        ".state/evidence-artifacts.sqlite3"
+    ),
+) -> None:
+    """Run a bounded, secret-redacted real source probe and preserve raw payloads."""
+
+    async def _run() -> None:
+        _, secrets = load_config()
+        try:
+            manifest_path, manifest = await run_bounded_source_probe(
+                source,
+                tuple(identifier),
+                output_root=output,
+                secrets=secrets,
+                at=datetime.now(UTC),
+            )
+        except (ValueError, SourceProbeError) as exc:
+            raise typer.BadParameter(str(exc)) from None
+        registry = ArtifactRegistry(registry_path)
+        try:
+            artifact_id = registry.register(
+                manifest_path,
+                artifact_type=ArtifactType.RAW_SAMPLE_MANIFEST,
+                status="VERIFIED",
+            )
+        finally:
+            registry.close()
+        console.print_json(json.dumps(manifest, sort_keys=True))
+        console.print(f"artifact={manifest_path} registry_id={artifact_id}")
+
+    asyncio.run(_run())
+
+
+@pit_app.command("audit-probe")
+def pit_audit_probe(
+    manifest: Annotated[Path, typer.Option("--manifest", exists=True, dir_okay=False)],
+    output: Annotated[Path, typer.Option("--output")],
+    registry_path: Annotated[Path, typer.Option("--registry")] = Path(
+        ".state/evidence-artifacts.sqlite3"
+    ),
+) -> None:
+    """Derive typed, claim-scoped audits from one hash-bound bounded probe."""
+
+    audits = audit_probe_manifest(manifest, output_root=output)
+    registry = ArtifactRegistry(registry_path)
+    results = []
+    try:
+        for path, artifact_type, document in audits:
+            artifact_id = registry.register(
+                path,
+                artifact_type=artifact_type,
+                status="VERIFIED" if document["decision"] == "PASS" else "REJECTED",
+            )
+            results.append(
+                {
+                    "artifact_type": artifact_type,
+                    "decision": document["decision"],
+                    "artifact": str(path),
+                    "registry_id": artifact_id,
+                    "qualifies_checks": document["qualifies_checks"],
+                }
+            )
+    finally:
+        registry.close()
+    console.print_json(json.dumps(results, sort_keys=True))
+    if not any(item["decision"] == "PASS" for item in results):
+        raise typer.Exit(code=2)
+
+
+@pit_app.command("register-artifact")
+def pit_register_artifact(
+    artifact: Annotated[Path, typer.Option("--artifact", exists=True, dir_okay=False)],
+    artifact_type: Annotated[ArtifactType, typer.Option("--type")],
+    status: Annotated[str, typer.Option("--status")] = "CAPTURED",
+    registry_path: Annotated[Path, typer.Option("--registry")] = Path(
+        ".state/evidence-artifacts.sqlite3"
+    ),
+) -> None:
+    """Register a local immutable evidence file; registration cannot replace review."""
+
+    registry = ArtifactRegistry(registry_path)
+    try:
+        artifact_id = registry.register(
+            artifact,
+            artifact_type=artifact_type,
+            status=status.upper(),
+        )
+        resolution = registry.resolve(artifact_id, expected_type=artifact_type)
+    finally:
+        registry.close()
+    console.print_json(resolution.model_dump_json())
+    console.print(f"registry_id={artifact_id}")
+
+
+@pit_app.command("evidence-list")
+def pit_evidence_list(
+    registry_path: Annotated[Path, typer.Option("--registry")] = Path(
+        ".state/evidence-artifacts.sqlite3"
+    ),
+) -> None:
+    """Show redacted Artifact Registry and Corpus Explorer evidence."""
+
+    registry = ArtifactRegistry(registry_path)
+    try:
+        summary = registry.ops_summary()
+        burn_in = registry.latest_verified_document(ArtifactType.BURN_IN_CORPUS)
+        golden_tapes = registry.latest_verified_document(ArtifactType.GOLDEN_TAPE)
+    finally:
+        registry.close()
+    console.print_json(
+        json.dumps(
+            {
+                "registry": summary,
+                "burn_in_corpus": burn_in,
+                "golden_tape_corpus": golden_tapes,
+            },
+            sort_keys=True,
+        )
+    )
 
 
 @pit_app.command("quality")

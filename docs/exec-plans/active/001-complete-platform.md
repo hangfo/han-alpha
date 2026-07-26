@@ -60,6 +60,13 @@ Record important decisions here with date, alternatives, and consequences. Do no
   Python tests at 85.09% branch-aware coverage, strict mypy over 107 source
   files, package/CLI/API/research smoke checks and the frontend suite/build.
   E1-B/R1-B remain externally blocked.
+- 2026-07-26: The webpage review and Issues #1/#2 exposed an unmodeled TWS
+  Read-Only/order-visibility conflict. The Observer now structurally blocks write
+  methods; account-only and manual-order visibility attestations are distinct.
+  Golden Tape transforms, Callback Truth Map, claim-scoped qualification evidence,
+  bounded live-source probes and source-backed Evidence/Corpus views are locally
+  implemented. External accounts, licenses, real samples and independent review
+  still block E1-B/R1-B completion.
 
 ## Verification log
 
@@ -92,4 +99,5 @@ M7-B.1 local evidence is archived in
 `../completed/011-m7b1-normalization-admission.md`. The current parallel work is
 tracked in `012-e1-broker-truth-readiness.md` and
 `013-r1-pit-data-qualification.md`; review integration decisions are recorded in
-`../../v2-plan/18_E1_R1_REVIEW_AND_EVIDENCE_AUTHORITY_ZH.md`.
+`../../v2-plan/18_E1_R1_REVIEW_AND_EVIDENCE_AUTHORITY_ZH.md` and
+`../../v2-plan/19_E1B_R1B_WEB_REVIEW_AND_REALITY_GAPS_ZH.md`.

@@ -66,11 +66,18 @@
 - Runtime processes contain Ed25519 public keys only. Safety Cases require
   independent Risk and Execution receipts; data qualification requires an
   unexpired signed reviewer receipt for every typed evidence artifact.
+- Qualification resolution also requires the exact `qualifies_checks` claim;
+  matching only a broad Artifact type cannot grant authority.
+- IBKR observation instantiates a write-blocked client. TWS Read-Only account
+  capture and manual-order visibility capture are distinct operator-attested
+  modes because TWS Read-Only hides order information.
+- Golden Tape metamorphic replay emits a Callback Truth Map. Bounded real-source
+  probes preserve secret-redacted raw payloads before typed PIT audits.
 
 ### Control plane
 
 - FastAPI exposes health, status, manual cycle, signals, orders, audit events, freeze, unfreeze, cancel-all, and flatten-all.
-- Read-only Ops separates `runtime_control` from `paper_canary`. Canary cannot pass without the external immutable safety case; the dashboard has no mutation controls.
+- Read-only Ops separates `runtime_control` from `paper_canary`. Canary cannot pass without the external immutable safety case; the dashboard has no mutation controls. Evidence Registry and Corpus views are source-backed and read-only.
 - The API is localhost-only by default and has no remote authentication in V1.
 
 ### Audit plane

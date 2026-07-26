@@ -142,7 +142,23 @@ def test_registered_unexpired_evidence_can_reach_promotion_qualified(tmp_path) -
             "schema_version": f"qualification-evidence-{index}-v1",
             "decision": "VERIFIED",
             "artifact_kind": artifact_type.value,
+            "qualifies_checks": sorted(
+                code
+                for code, mapped_type in CHECK_ARTIFACT_TYPES.items()
+                if mapped_type is artifact_type
+            ),
         }
+        if artifact_type is ArtifactType.RAW_SAMPLE_MANIFEST:
+            document.update(
+                {
+                    "schema_version": "pit-raw-sample-manifest-v1",
+                    "decision": "PASS",
+                    "bounded": True,
+                    "all_http_success": True,
+                    "secrets_redacted": True,
+                    "responses": [{"name": "reviewed-fixture"}],
+                }
+            )
         path = tmp_path / f"{artifact_type.value}.json"
         write_immutable_json(path, document)
         references[artifact_type] = registry.register(

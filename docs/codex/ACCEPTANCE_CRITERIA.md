@@ -86,6 +86,11 @@ E1-A/R1-A进一步拒绝Hash形状和Profile自报结论：Session/Corpus必须�
 重验，Safety Case采用离线Ed25519双Reviewer，数据资格需要带Expiry的Artifact
 与Reviewer Receipt。E1-B/R1-B真实环境和样本仍未完成，相关外部条目不勾选。
 
+E1-B/R1-B本地验收工具进一步区分TWS Read-Only账户观察与ALL-Scope订单可见性；
+Observer写方法被结构性封锁。Golden Tape变形回放、Callback Truth Map、有界真实
+源Probe、Claim-scoped Artifact及Evidence/Corpus只读视图已实现。没有真实账户、
+许可、样本和Reviewer Receipt时仍不得勾选外部验收。
+
 ## 8. 工程质量
 
 - [x] Ruff通过。

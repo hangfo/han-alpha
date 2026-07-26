@@ -49,14 +49,16 @@ In TWS/IB Gateway:
 1. log into the Paper account with normal GUI/2FA;
 2. enable ActiveX and Socket Clients;
 3. use Paper port 7497 for TWS or 4002 for Gateway unless deliberately changed;
-4. keep API Read-Only enabled for E1;
+4. keep API Read-Only enabled for account/position-only captures;
 5. use a dedicated client ID;
 6. enable detailed API logs for the bounded burn-in window;
 7. verify account and market-data entitlements manually.
 
 TWS Read-Only is an operator configuration and is not trusted as remotely
-introspectable. The Preflight records an explicit attestation, and Broker write
-capability remains disabled in Han Alpha regardless.
+introspectable. IBKR documents that order information is unavailable while that
+setting is enabled. Therefore ALL-Scope manual-order visibility uses a distinct
+operator attestation after disabling the TWS setting; Han Alpha still instantiates
+an observer-only client whose order-mutating methods raise `PermissionError`.
 
 Configure `.env` locally without committing it:
 
@@ -82,6 +84,10 @@ hanalpha ibkr-burn-in \
   --capture-scenario empty_account \
   --output .state/burn-in/api
 
+# For ALL/manual-order visibility only: disable TWS Read-Only, keep Han Alpha's
+# observer-only client, and record the distinct preflight.
+hanalpha ibkr-preflight --order-visibility-attested
+
 hanalpha ibkr-burn-in \
   --state .state/ibkr-observer.sqlite3 \
   --control .state/execution-control.sqlite3 \
@@ -97,6 +103,10 @@ hanalpha ibkr-burn-in-evaluate \
 hanalpha ibkr-burn-in-evaluate \
   --input .state/burn-in/all \
   --output .state/burn-in/all-corpus.json
+
+hanalpha ibkr-golden-tape-evaluate \
+  --input .state/burn-in/golden \
+  --output .state/burn-in/golden-tape-corpus.json
 ```
 
 `all` is a different Scope and is intended to test manually submitted TWS
@@ -163,6 +173,34 @@ hanalpha pit vendor-preflight
 This reports `credentials_present_for`, never `ready_sources`. SEC identification
 must include a project name and a non-placeholder contact email; only its SHA256
 and the request-throttle policy hash are persisted.
+
+Run bounded real probes only after configuring the corresponding local identity
+or key:
+
+```bash
+hanalpha pit probe-source --source sec_edgar \
+  --identifier 320193 \
+  --output .state/pit/probes/sec
+
+hanalpha pit probe-source --source fred_alfred \
+  --identifier CPIAUCSL \
+  --output .state/pit/probes/fred
+
+hanalpha pit probe-source --source massive \
+  --identifier AAPL \
+  --output .state/pit/probes/massive
+
+hanalpha pit audit-probe \
+  --manifest <content-addressed-probe-manifest.json> \
+  --output .state/pit/audits
+
+hanalpha pit evidence-list
+```
+
+Probe failures are redacted before reaching the CLI, including HTTP request URLs
+that may otherwise contain API keys. A successful Probe proves only bounded
+payload access. Audit Artifacts declare the exact `qualifies_checks` they can
+support; a shared Artifact type cannot satisfy unrelated checks.
 
 Fail-closed source qualification:
 

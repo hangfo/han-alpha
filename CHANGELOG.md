@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-07-26 — E1-B/R1-B executable acceptance tooling
+
+- Added an observer-only IBKR client that structurally rejects every order write,
+  corrected the TWS Read-Only/order-visibility split, and automatically registered
+  Preflight and Session evidence.
+- Added Golden Tape metamorphic replay, Callback Truth Map, explicit Scope-mixing
+  rejection and source-backed Corpus/Evidence views in Ops and React.
+- Added bounded secret-redacted SEC/Massive/FRED probes, immutable raw payload
+  manifests and typed source audits.
+- Bound qualification Artifacts to exact `qualifies_checks`; a generic Artifact
+  type can no longer satisfy unrelated evidence requirements.
+- Sanitized live Probe errors so request URLs containing API keys cannot leak
+  through CLI tracebacks.
+- Verified 237 Python tests at 85.00% branch-aware coverage, strict mypy over
+  110 source files, package/CLI/API/research smoke checks, frontend tests and
+  production build. External Broker/vendor calls remain credential-gated.
+
 ## 2026-07-26 — E1-A/R1-A evidence authority
 
 - Made Burn-in Manifest v2 self-verifying across canonical identity, files,

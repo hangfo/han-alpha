@@ -18,6 +18,7 @@ from hanalpha.execution.burn_in import (
     verify_burn_in_manifest,
 )
 from hanalpha.execution.control_models import BrokerSnapshot
+from hanalpha.execution.golden_tape import evaluate_golden_tape_corpus
 from hanalpha.execution.ibkr_observer import (
     IBKRCallbackCollector,
     IBKRFactStore,
@@ -32,7 +33,7 @@ from hanalpha.execution.safety_case import (
     verify_safety_case,
 )
 from hanalpha.ops.artifact_registry import ArtifactRegistry, ArtifactType
-from hanalpha.ops.artifacts import write_immutable_json
+from hanalpha.ops.artifacts import sha256_file, write_immutable_json
 from hanalpha.simulation.events import canonical_hash
 
 NOW = datetime(2024, 1, 1, tzinfo=UTC)
@@ -122,8 +123,23 @@ def test_preflight_is_redacted_and_fail_closed(tmp_path) -> None:
     assert artifact["account_hash"] == account_hash(ACCOUNT)
     assert not artifact["ready"]
     assert artifact["write_capability"] is False
+    assert artifact["checks"]["observer_client_write_methods_blocked"]
+    assert artifact["observation_mode"] == "UNATTESTED"
     assert not artifact["checks"]["official_ibapi_importable"]
     assert not artifact["checks"]["paper_socket_listening"]
+
+    order_visibility = build_ibkr_preflight(
+        config,
+        secrets,
+        at=NOW,
+        repository_root=tmp_path,
+        read_only_attested=False,
+        order_visibility_attested=True,
+        importable=lambda: True,
+        listening=lambda _host, _port: True,
+    )
+    assert order_visibility["ready"]
+    assert order_visibility["observation_mode"] == "ORDER_VISIBILITY_ZERO_WRITE_CLIENT"
 
 
 def test_burn_in_session_exports_only_bound_tape_and_hashes(tmp_path) -> None:
@@ -196,6 +212,13 @@ def test_burn_in_session_exports_only_bound_tape_and_hashes(tmp_path) -> None:
     assert manifest["safety_case_eligible"] is True
     assert len(manifest["files"]["tape.sqlite3"]) == 64
     assert verify_burn_in_manifest(session_dir).verified
+    golden = evaluate_golden_tape_corpus(
+        (session_dir,), required_scenarios=frozenset({"repeated_connection"})
+    )
+    assert golden["decision"] == "BLOCKED"
+    assert golden["tapes"][0]["decision"] == "PASS"
+    assert golden["tapes"][0]["callback_truth_map"]["cash"] == "AUTHORITATIVE"
+    assert "TRANSFORM_COVERAGE_MISSING:delayed_commission" in golden["reasons"]
     matrix = evaluate_burn_in_corpus(
         (session_dir,),
         minimum_sessions=1,
@@ -292,6 +315,34 @@ def test_burn_in_evaluate_cli_persists_blocked_corpus_and_exits_nonzero(
     assert json.loads(output.read_text())["decision"] == "BLOCKED"
 
 
+def test_preflight_cli_registers_rejected_zero_write_artifact(tmp_path) -> None:
+    output = tmp_path / "preflight"
+    registry_path = tmp_path / "registry.sqlite3"
+    result = CliRunner().invoke(
+        app,
+        [
+            "ibkr-preflight",
+            "--read-only-not-attested",
+            "--output",
+            str(output),
+            "--registry",
+            str(registry_path),
+        ],
+    )
+    assert result.exit_code == 2
+    artifacts = tuple(output.glob("*.json"))
+    assert len(artifacts) == 1
+    registry = ArtifactRegistry(registry_path)
+    try:
+        artifact_id = sha256_file(artifacts[0])
+        resolution = registry.resolve(artifact_id, expected_type=ArtifactType.IBKR_PREFLIGHT)
+        assert resolution.artifact_found
+        assert not resolution.verified
+        assert "ARTIFACT_POLICY_NOT_PASSED" in resolution.reasons
+    finally:
+        registry.close()
+
+
 def test_artifact_registry_is_immutable_and_resolves_fail_closed(tmp_path) -> None:
     registry = ArtifactRegistry(tmp_path / "registry.sqlite3")
     artifact = tmp_path / "artifact.json"
@@ -340,6 +391,19 @@ def test_artifact_registry_is_immutable_and_resolves_fail_closed(tmp_path) -> No
             at=NOW,
         )
     assert registry.resolve(artifact_id, expected_type=ArtifactType.LICENSE_RECEIPT).verified
+    assert registry.latest_verified_document(ArtifactType.LICENSE_RECEIPT) == {
+        "decision": "VERIFIED",
+        "schema_version": "license-receipt-v1",
+    }
+    summary = registry.ops_summary()
+    assert summary["total"] == summary["verified"] == 1
+    assert summary["type_counts"] == {"LICENSE_RECEIPT": 1}
+    claim_mismatch = registry.resolve(
+        artifact_id,
+        expected_type=ArtifactType.LICENSE_RECEIPT,
+        required_claim="systematic_backtest_license",
+    )
+    assert "ARTIFACT_CLAIM_MISMATCH" in claim_mismatch.reasons
 
     invalid_reference = registry.resolve("not-a-hash", expected_type=ArtifactType.LICENSE_RECEIPT)
     assert invalid_reference.reasons == (
@@ -457,6 +521,12 @@ def _register_safety_artifacts(registry: ArtifactRegistry, root: Path) -> dict[s
                 "sessions_eligible": 30,
             }
             document = {"corpus_id": canonical_hash(body), **body}
+        elif artifact_type is ArtifactType.GOLDEN_TAPE:
+            body = {
+                "schema_version": "ibkr-golden-tape-corpus-v1",
+                "decision": "PASS",
+            }
+            document = {"artifact_id": canonical_hash(body), **body}
         else:
             document = {
                 "schema_version": f"{artifact_type.value.lower()}-v1",

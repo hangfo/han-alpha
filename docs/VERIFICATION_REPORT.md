@@ -1,5 +1,57 @@
 # Verification report
 
+## E1-B/R1-B executable acceptance tooling - 2026-07-26
+
+Baseline: `0b9b9879071b928e6524917263e90904aaaf962f`.
+
+Detailed review decisions:
+`docs/v2-plan/19_E1B_R1B_WEB_REVIEW_AND_REALITY_GAPS_ZH.md`.
+
+VERIFIED:
+
+- The IBKR observation process uses an observer-only client whose order placement,
+  cancellation, global cancellation and option exercise methods fail structurally.
+- Preflight distinguishes TWS Read-Only account/position observation from the
+  order-visible zero-write phase. Preflights and capture sessions are registered
+  automatically as typed, hash-resolved evidence.
+- Golden Tape evaluation now runs six deterministic metamorphic transforms across
+  fourteen required Broker scenarios and emits a machine-readable Callback Truth
+  Map. Mixed Completed Orders scopes fail closed.
+- Bounded SEC, Massive and FRED/ALFRED probes preserve immutable raw bytes and
+  redacted provenance. Typed audits separate access, timestamp, revision,
+  symbology and survivorship claims.
+- Qualification artifacts must explicitly declare the exact
+  `qualifies_checks` claim they satisfy; matching only the broad artifact type is
+  insufficient.
+- Ops and React expose source-backed Artifact Registry and Corpus status rather
+  than placeholder counters.
+- Local preflights remained fail-closed: the official IBKR API, Paper account,
+  Paper socket, SEC identity and vendor credentials are absent. Probe CLI errors
+  are sanitized and do not expose request URLs, keys or tracebacks.
+- `./scripts/preflight.sh`: PASS in Python 3.12.13.
+- `./scripts/verify_all.sh`: PASS; 237 Python tests, 85.00% branch-aware
+  coverage, Ruff, strict mypy over 110 source files, sdist/wheel,
+  CLI/API/synthetic/backtest smoke checks, 2 Vitest tests, frontend
+  lint/typecheck and Vite production build.
+- `npm audit`: zero vulnerabilities.
+
+BLOCKED:
+
+- GitHub #1 external acceptance: IBKR license/TWS installation, authenticated
+  Paper login, API and ALL scope callback captures, reset/nightly scenarios,
+  Golden Tape corpus and independent Safety Case reviews.
+- GitHub #2 external acceptance: real SEC identity, Massive/FRED credentials,
+  written vendor rights, bounded live samples and independent qualification
+  reviews.
+- Any real PIT OOS, post-cost capacity, forward performance or profitability
+  claim.
+
+NOT IMPLEMENTED:
+
+- E2 Canary Permit and E3 first human-approved Paper order.
+- Production vendor ingestion or R2 strategy promotion.
+- Unattended Paper or live trading; no `live_auto` state exists.
+
 ## E1-A/R1-A evidence-authority closure - 2026-07-26
 
 Baseline: `778fac41b95efde6e0a8551cd455732754e58b54`.
