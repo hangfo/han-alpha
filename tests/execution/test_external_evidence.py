@@ -199,6 +199,23 @@ def test_burn_in_session_exports_only_bound_tape_and_hashes(tmp_path) -> None:
             )
             == session_dir
         )
+        invalid_scenario_dir = persist_burn_in_session(
+            source_store=source,
+            certificate=certificate,
+            snapshot=snapshot,
+            output_root=tmp_path / "invalid-scenario",
+            git_commit="a" * 40,
+            config_hash="b" * 64,
+            client_id=19,
+            paper_port=7497,
+            reconciliation_status="CONVERGED",
+            tws_server_version=180,
+            ibapi_version="10.40.1",
+            vote_disposition="ACCEPTED_FIRST",
+            consensus_count_after_vote=1,
+            equivalence_receipt={"state_equivalent": True},
+            capture_scenario="static_position",
+        )
     finally:
         source.close()
     manifest = json.loads((session_dir / "manifest.json").read_text())
@@ -211,11 +228,24 @@ def test_burn_in_session_exports_only_bound_tape_and_hashes(tmp_path) -> None:
     assert manifest["accepted_facts"] == manifest["written_facts"] == 13
     assert manifest["dropped_facts"] == 0
     assert manifest["scope_hash"] == certificate.visibility.scope_hash
+    assert manifest["completed_orders_scope"] == "all"
+    assert manifest["scenario_observation"] == {
+        "event_count": 0,
+        "order_count": 0,
+        "position_count": 0,
+    }
     assert manifest["account_identity"]["account_hash"] == certificate.account_hash
     assert manifest["account_identity_hash"] == manifest["account_identity"]["identity_hash"]
     assert manifest["safety_case_eligible"] is True
     assert len(manifest["files"]["tape.sqlite3"]) == 64
     assert verify_burn_in_manifest(session_dir).verified
+    invalid_manifest = json.loads(
+        (invalid_scenario_dir / "manifest.json").read_text()
+    )
+    assert invalid_manifest["safety_case_eligible"] is False
+    assert invalid_manifest["ineligibility_reasons"] == [
+        "SCENARIO_STATIC_POSITION_MISSING_POSITION"
+    ]
     golden = evaluate_golden_tape_corpus(
         (session_dir,), required_scenarios=frozenset({"repeated_connection"})
     )

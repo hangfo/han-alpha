@@ -59,7 +59,13 @@ def e1_progress(output_root: Path, scope: E1Scope) -> dict[str, Any]:
         if not verification.verified or not verification.manifest.get("safety_case_eligible"):
             invalid_sessions += 1
             continue
-        if verification.manifest.get("completed_orders_scope") != scope.value:
+        completed_orders_scope = verification.manifest.get("completed_orders_scope")
+        if completed_orders_scope is None:
+            api_only = verification.manifest.get("completed_orders_api_only")
+            completed_orders_scope = (
+                "api" if api_only is True else "all" if api_only is False else None
+            )
+        if completed_orders_scope != scope.value:
             invalid_sessions += 1
             continue
         counts[str(verification.manifest.get("capture_scenario"))] += 1

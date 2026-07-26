@@ -1,6 +1,22 @@
 # E1-B/R1-B Issue #4 审阅决策与真实接入操作手册
 
-更新：2026-07-26
+更新：2026-07-27
+
+## 2026-07-27 本机真实接入结果
+
+- TWS Paper 已安装、登录并完成2FA，`127.0.0.1:7497`真实监听；
+- 用户下载的官方 `twsapi_macunix.1048.01.zip` 已在本人接受许可证后安装；
+- 官方 `ibapi 10.48.1`及其固定依赖`protobuf 5.29.5`可导入，`pip check`通过；
+- 程序以 Client ID `41`连接；TWS的“主API客户ID”是可选Master Client设置，
+  不是本程序Client ID输入框，保持空白是正确配置；
+- 单一Managed Paper账户已通过只读发现写入macOS Keychain，账户标识未进入
+  命令参数、输出、Artifact或Git；
+- 为观察API订单全量状态，TWS的`只读API`已取消；Han Alpha Observer仍在代码层
+  禁止下单、撤单、全撤和期权行权，因此本轮没有Broker写入；
+- 真实账户摘要、持仓、open/completed orders、executions及终止回调完成，
+  E1 API `empty_account`达到`5/5`，零事实丢失、零writer error、对账收敛；
+- 下一关是`static_position 0/5`，必须先在Paper中产生真实静态持仓。系统新增
+  场景真实性校验，不能把空账户样本错标为持仓/订单场景。
 
 ## 结论
 
@@ -44,7 +60,7 @@ Issue #1 覆盖 Broker Truth，Issue #2 覆盖 PIT Rights/Qualification，Issue 
    BLOCKED，不把计划数量当真实数量。
 5. 这批改动不改变Broker写权限、不增加外部请求，也不改变回测热路径。
 
-## 你的Mac当前事实
+## 初始本机事实（2026-07-26，已由上方结果取代）
 
 - Apple M3 Pro / arm64，适用Apple Silicon安装包；
 - 未发现TWS或IB Gateway；

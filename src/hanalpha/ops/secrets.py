@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import ctypes
 import re
-import subprocess
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
@@ -9,6 +9,7 @@ from typing import Protocol
 from hanalpha.config import SecretSettings
 
 KEYCHAIN_SERVICE = "com.hanalpha.local"
+ERR_SEC_ITEM_NOT_FOUND = -25300
 
 
 class LocalSecret(StrEnum):
@@ -61,12 +62,14 @@ class MacOSKeychainSecretProvider:
         self,
         *,
         service: str = KEYCHAIN_SERVICE,
-        runner: object = subprocess.run,
+        runner: object | None = None,
     ) -> None:
         self.service = service
         self._runner = runner
 
     def get(self, name: LocalSecret) -> str | None:
+        if self._runner is None:
+            return _macos_keychain_get(self.service, name.value)
         result = self._runner(  # type: ignore[operator]
             [
                 "/usr/bin/security",
@@ -89,6 +92,9 @@ class MacOSKeychainSecretProvider:
     def set(self, name: LocalSecret, value: str) -> None:
         if not value:
             raise ValueError("empty secret values are not stored")
+        if self._runner is None:
+            _macos_keychain_set(self.service, name.value, value)
+            return
         result = self._runner(  # type: ignore[operator]
             [
                 "/usr/bin/security",
@@ -107,6 +113,141 @@ class MacOSKeychainSecretProvider:
         )
         if result.returncode != 0:
             raise RuntimeError(f"Keychain write failed for {name.value}")
+
+
+def _macos_security_framework() -> tuple[ctypes.CDLL, ctypes.CDLL]:
+    security = ctypes.CDLL(
+        "/System/Library/Frameworks/Security.framework/Security"
+    )
+    core_foundation = ctypes.CDLL(
+        "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+    )
+    security.SecKeychainFindGenericPassword.restype = ctypes.c_int32
+    security.SecKeychainFindGenericPassword.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_char_p,
+        ctypes.c_uint32,
+        ctypes.c_char_p,
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    security.SecKeychainAddGenericPassword.restype = ctypes.c_int32
+    security.SecKeychainAddGenericPassword.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_char_p,
+        ctypes.c_uint32,
+        ctypes.c_char_p,
+        ctypes.c_uint32,
+        ctypes.c_char_p,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    security.SecKeychainItemModifyAttributesAndData.restype = ctypes.c_int32
+    security.SecKeychainItemModifyAttributesAndData.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_char_p,
+    ]
+    security.SecKeychainItemFreeContent.restype = ctypes.c_int32
+    security.SecKeychainItemFreeContent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    core_foundation.CFRelease.argtypes = [ctypes.c_void_p]
+    return security, core_foundation
+
+
+def _macos_keychain_find(
+    service: str,
+    account: str,
+) -> tuple[ctypes.CDLL, ctypes.CDLL, int, int, ctypes.c_void_p, ctypes.c_void_p]:
+    security, core_foundation = _macos_security_framework()
+    service_bytes = service.encode()
+    account_bytes = account.encode()
+    password_length = ctypes.c_uint32()
+    password_data = ctypes.c_void_p()
+    item_ref = ctypes.c_void_p()
+    status = security.SecKeychainFindGenericPassword(
+        None,
+        len(service_bytes),
+        service_bytes,
+        len(account_bytes),
+        account_bytes,
+        ctypes.byref(password_length),
+        ctypes.byref(password_data),
+        ctypes.byref(item_ref),
+    )
+    return (
+        security,
+        core_foundation,
+        status,
+        password_length.value,
+        password_data,
+        item_ref,
+    )
+
+
+def _macos_keychain_get(service: str, account: str) -> str | None:
+    (
+        security,
+        core_foundation,
+        status,
+        password_length,
+        password_data,
+        item_ref,
+    ) = _macos_keychain_find(service, account)
+    if status == ERR_SEC_ITEM_NOT_FOUND:
+        return None
+    if status != 0:
+        raise RuntimeError(f"Keychain lookup failed for {account}")
+    try:
+        value = ctypes.string_at(password_data, password_length).decode()
+        return value or None
+    finally:
+        security.SecKeychainItemFreeContent(None, password_data)
+        if item_ref:
+            core_foundation.CFRelease(item_ref)
+
+
+def _macos_keychain_set(service: str, account: str, value: str) -> None:
+    security, core_foundation, status, _, password_data, item_ref = _macos_keychain_find(
+        service, account
+    )
+    value_bytes = value.encode()
+    if status == 0:
+        try:
+            security.SecKeychainItemFreeContent(None, password_data)
+            update_status = security.SecKeychainItemModifyAttributesAndData(
+                item_ref,
+                None,
+                len(value_bytes),
+                value_bytes,
+            )
+            if update_status != 0:
+                raise RuntimeError(f"Keychain update failed for {account}")
+        finally:
+            if item_ref:
+                core_foundation.CFRelease(item_ref)
+        return
+    if status != ERR_SEC_ITEM_NOT_FOUND:
+        raise RuntimeError(f"Keychain lookup failed for {account}")
+    service_bytes = service.encode()
+    account_bytes = account.encode()
+    created_item = ctypes.c_void_p()
+    create_status = security.SecKeychainAddGenericPassword(
+        None,
+        len(service_bytes),
+        service_bytes,
+        len(account_bytes),
+        account_bytes,
+        len(value_bytes),
+        value_bytes,
+        ctypes.byref(created_item),
+    )
+    if created_item:
+        core_foundation.CFRelease(created_item)
+    if create_status != 0:
+        raise RuntimeError(f"Keychain create failed for {account}")
 
 
 def settings_from_provider(

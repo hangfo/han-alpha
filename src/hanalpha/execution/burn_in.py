@@ -402,6 +402,12 @@ def _build_manifest(
         ineligibility_reasons.append("WRITER_ERROR_DETECTED")
     if reconciliation_status != "CONVERGED":
         ineligibility_reasons.append("RECONCILIATION_BLOCKED")
+    if capture_scenario == "empty_account" and (snapshot.positions or snapshot.orders):
+        ineligibility_reasons.append("SCENARIO_EMPTY_ACCOUNT_HAS_BROKER_STATE")
+    if capture_scenario == "static_position" and not snapshot.positions:
+        ineligibility_reasons.append("SCENARIO_STATIC_POSITION_MISSING_POSITION")
+    if capture_scenario in {"api_order", "manual_order"} and not snapshot.orders:
+        ineligibility_reasons.append("SCENARIO_ORDER_MISSING_ORDER")
     equivalence_receipt_hash = (
         canonical_hash(equivalence_receipt) if equivalence_receipt is not None else None
     )
@@ -432,7 +438,15 @@ def _build_manifest(
             mode="json", exclude={"observation_window", "scope_hash"}
         ),
         "completed_orders_api_only": certificate.visibility.completed_orders_api_only,
+        "completed_orders_scope": (
+            "api" if certificate.visibility.completed_orders_api_only else "all"
+        ),
         "capture_scenario": capture_scenario,
+        "scenario_observation": {
+            "order_count": len(snapshot.orders),
+            "position_count": len(snapshot.positions),
+            "event_count": len(snapshot.events),
+        },
         "started_at": (
             certificate.visibility.observation_window.execution_history_end.isoformat()
             if certificate.visibility.observation_window

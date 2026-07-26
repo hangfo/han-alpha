@@ -56,6 +56,8 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
         self.positions_cache: dict[str, Position] = {}
         self.account_values: dict[str, float] = {}
         self.connected_event = threading.Event()
+        self.managed_accounts_event = threading.Event()
+        self.managed_accounts: tuple[str, ...] = ()
         self.lock = threading.RLock()
         self.observer: IBKRCallbackCollector | None = None
 
@@ -72,19 +74,37 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
         self._observe(IBKRFactType.NEXT_VALID_ID, {"order_id": orderId}, key=str(orderId))
 
     def error(
-        self, reqId: int, errorCode: int, errorString: str, advancedOrderRejectJson: str = ""
+        self,
+        reqId: int,
+        error_time_or_code: int,
+        error_code_or_string: int | str,
+        error_string_or_advanced: str = "",
+        advanced_order_reject_json: str = "",
     ) -> None:
+        if isinstance(error_code_or_string, str):
+            error_code = error_time_or_code
+            error_string = error_code_or_string
+            advanced_reject = error_string_or_advanced
+        else:
+            error_code = error_code_or_string
+            error_string = error_string_or_advanced
+            advanced_reject = advanced_order_reject_json
         self._observe(
             IBKRFactType.ERROR,
-            {"request_id": reqId, "code": errorCode, "message": errorString},
-            key=f"{reqId}:{errorCode}:{errorString}",
+            {
+                "request_id": reqId,
+                "code": error_code,
+                "message": error_string,
+                "advanced_reject_present": bool(advanced_reject),
+            },
+            key=f"{reqId}:{error_code}:{error_string}",
         )
         if reqId >= 0:
             self.order_events.append(
                 OrderEvent(
                     order_id=str(reqId),
                     status=OrderStatus.ERROR,
-                    message=f"IBKR {errorCode}: {errorString}",
+                    message=f"IBKR {error_code}: {error_string}",
                     broker_order_id=str(reqId),
                 )
             )
@@ -233,6 +253,8 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
 
     def managedAccounts(self, accountsList: str) -> None:
         accounts = [item for item in accountsList.split(",") if item]
+        self.managed_accounts = tuple(accounts)
+        self.managed_accounts_event.set()
         self._observe(
             IBKRFactType.MANAGED_ACCOUNTS,
             {
@@ -381,6 +403,7 @@ class IBKRBroker:
         self.observer_only = observer_only
         self.app = _ObserverOnlyIBApp() if observer_only else _IBApp()
         self.thread: threading.Thread | None = None
+        self.server_version: int | None = None
         self._idempotency: dict[str, int] = {}
 
     async def connect_transport_only(self, timeout: float = 10) -> None:
@@ -393,9 +416,33 @@ class IBKRBroker:
         if not ok:
             self.app.disconnect()
             raise TimeoutError("IBKR nextValidId was not received")
+        version = self.app.serverVersion() if hasattr(self.app, "serverVersion") else None
+        self.server_version = int(version) if version is not None else None
 
     async def connect(self, timeout: float = 10) -> None:
         await self.connect_transport_only(timeout)
+
+    async def discover_single_managed_account(self, timeout: float = 10) -> str:
+        """Discover exactly one authenticated account without logging or persisting it."""
+
+        if not self.observer_only or self.port not in {4002, 7497}:
+            raise RuntimeError("account discovery requires an observer-only Paper client")
+        self.app.managed_accounts_event.clear()
+        try:
+            await self.connect_transport_only(timeout)
+            received = await asyncio.to_thread(
+                self.app.managed_accounts_event.wait,
+                timeout,
+            )
+            if not received:
+                raise TimeoutError("IBKR managedAccounts was not received")
+            if len(self.app.managed_accounts) != 1:
+                raise RuntimeError("exactly one managed Paper account is required")
+            return self.app.managed_accounts[0]
+        finally:
+            self.app.disconnect()
+            if self.thread is not None:
+                await asyncio.to_thread(self.thread.join, min(timeout, 5))
 
     async def observe_read_only(
         self,
@@ -481,7 +528,7 @@ class IBKRBroker:
         self.app.reqManagedAccts()
         self.app.reqAccountSummary(
             barrier.account_request_id,
-            self.account,
+            "All",
             "NetLiquidation,TotalCashValue,SettledCash,BuyingPower,AccruedCash",
         )
         self.app.reqAllOpenOrders()

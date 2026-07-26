@@ -1,23 +1,30 @@
 # Broker and real-data onboarding
 
-Updated: 2026-07-26
+Updated: 2026-07-27
 
 ## Current local result
 
-The repository environment currently reports:
+The local Broker environment now reports:
 
 ```text
-official ibapi importable: false
+TWS Paper installed and authenticated: true
+official ibapi importable: true (10.48.1)
 localhost:4002 listening: false
-localhost:7497 listening: false
-IBKR_ACCOUNT configured: false
+localhost:7497 listening: true
+IBKR_ACCOUNT stored in macOS Keychain: true
+E1 API empty_account sessions: 5/5
 MASSIVE_API_KEY configured: false
 FRED_API_KEY configured: false
 SEC_USER_AGENT configured: false
 ```
 
-This is a credential/environment BLOCKED state, not a code failure. No Broker or
-vendor request was made.
+TWS Server Version 225, the single authenticated managed Paper account, account
+summary, positions, API completed/open orders and executions were observed through
+the official API without printing the identifier or persisting it outside
+Keychain. E1-B is
+still `BLOCKED_HUMAN_ACTION` at `static_position`: the remaining matrix requires
+genuine Paper positions/orders and bounded restart, recovery, nightly-reset and
+client-switch events. No vendor request or Broker write was made.
 
 The preferred local secret store is macOS Keychain. Secret values are read from
 stdin by the onboarding CLI, are never placed in command arguments, and are not
@@ -81,14 +88,21 @@ setting is enabled. Therefore ALL-Scope manual-order visibility uses a distinct
 operator attestation after disabling the TWS setting; Han Alpha still instantiates
 an observer-only client whose order-mutating methods raise `PermissionError`.
 
-Store the Paper account in Keychain:
+Store the Paper account in Keychain. When exactly one Paper account is logged in,
+prefer automatic redacted discovery:
 
 ```bash
+hanalpha local-onboard discover-ibkr-account
+
+# Manual stdin entry remains available if discovery is not applicable.
 hanalpha local-onboard set-secret --name ibkr-account
 ```
 
 Paper environment, host, TWS port `7497` and client ID `41` remain non-secret
-local configuration. The complete novice-safe installation, 2FA, socket and
+local configuration. Client ID `41` is passed by Han Alpha during connection; do
+not enter it into TWS's optional **Master API Client ID** field. Leave that field
+blank unless a separately reviewed multi-client design requires one. The complete
+novice-safe installation, 2FA, socket and
 attestation sequence is in
 `docs/v2-plan/21_E1B_R1B_ISSUE4_REVIEW_AND_OPERATOR_GUIDE_ZH.md`.
 
@@ -103,6 +117,10 @@ hanalpha local-onboard ibkr --read-only-attested --github-summary
 hanalpha e1 run --scope api --dry-run --github-summary
 
 hanalpha ibkr-preflight --read-only-attested
+
+# Full order-state observation requires TWS API Read-Only to be unchecked while
+# Han Alpha remains a structurally zero-write client.
+hanalpha e1 run --scope api --execute --order-visibility-attested --github-summary
 
 hanalpha ibkr-burn-in \
   --state .state/ibkr-observer.sqlite3 \

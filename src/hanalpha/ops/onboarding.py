@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import importlib.metadata
 import importlib.util
 import platform
@@ -34,6 +35,9 @@ class OperatorExit(IntEnum):
     FAILED_CODE = 1
     BLOCKED_HUMAN_ACTION = 20
     BLOCKED_EXTERNAL_RIGHTS = 21
+
+
+IBAPI_PROTOBUF_REQUIREMENT = "protobuf==5.29.5"
 
 
 def status_exit(status: OperatorStatus) -> int:
@@ -204,6 +208,21 @@ def install_official_ibapi_archive(
         )
         if package is None:
             raise ValueError("OFFICIAL_PYTHONCLIENT_NOT_FOUND")
+        dependency_result = runner(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--only-binary=:all:",
+                IBAPI_PROTOBUF_REQUIREMENT,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if dependency_result.returncode != 0:
+            raise RuntimeError("OFFICIAL_IBAPI_DEPENDENCY_INSTALL_FAILED")
         result = runner(
             [sys.executable, "-m", "pip", "install", "--no-deps", str(package)],
             check=False,
@@ -213,7 +232,7 @@ def install_official_ibapi_archive(
         if result.returncode != 0:
             raise RuntimeError("OFFICIAL_IBAPI_INSTALL_FAILED")
     version = _ibapi_version()
-    if version is None:
+    if version is None or not _ibapi_importable():
         raise RuntimeError("OFFICIAL_IBAPI_NOT_IMPORTABLE_AFTER_INSTALL")
     return version
 
@@ -240,6 +259,8 @@ def _ibkr_applications() -> tuple[Path, ...]:
         candidates.extend(root.glob("*Trader Workstation*.app"))
         candidates.extend(root.glob("*IB Gateway*.app"))
         candidates.extend(root.glob("TWS*.app"))
+        candidates.extend(root.glob("Trader Workstation/*.app"))
+        candidates.extend(root.glob("IB Gateway/*.app"))
     return tuple(sorted(set(candidates)))
 
 
@@ -269,6 +290,14 @@ def _ibapi_version() -> str | None:
         return importlib.metadata.version("ibapi")
     except importlib.metadata.PackageNotFoundError:
         return None
+
+
+def _ibapi_importable() -> bool:
+    try:
+        importlib.import_module("ibapi.client")
+    except (ImportError, ModuleNotFoundError):
+        return False
+    return True
 
 
 def _app_kind(path: Path) -> str:

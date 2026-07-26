@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-07-27 — Authenticated IBKR Paper onboarding and first E1 evidence
+
+- Installed the user-provided official `ibapi 10.48.1` with its exact
+  `protobuf 5.29.5` dependency and validated real imports.
+- Added nested macOS TWS detection, redacted single-account discovery, native
+  Security-framework Keychain reads/writes and current IBKR callback compatibility.
+- Corrected Account Summary group usage, authoritative required-tag handling and
+  TWS server-version capture across disconnect.
+- Versioned progressive Corpus evaluations and made legacy/new Completed Orders
+  scope manifests compatible.
+- Added scenario-state evidence so empty, static-position and order captures
+  cannot gain coverage from labels alone.
+- Captured five eligible real Paper API-Scope empty-account sessions with no fact
+  drops or reconciliation failures. No Broker write or vendor request was made.
+- Full verification passed 266 Python tests at 85.06% branch-aware coverage,
+  strict mypy over 115 source files, package/CLI/API/research smoke checks,
+  frontend tests/build and zero npm audit vulnerabilities.
+
 ## 2026-07-26 — Issue #4 external acceptance hardening
 
 - Replaced child-process Secret environment injection with bounded, whitelisted

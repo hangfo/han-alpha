@@ -23,6 +23,7 @@ dependencies = [
   "python-dateutil>=2.9,<3",
   "duckdb>=1.5,<2",
   "cryptography>=45,<47",
+  "protobuf==5.29.5",
 ]
 
 [project.optional-dependencies]

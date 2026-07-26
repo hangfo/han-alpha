@@ -360,11 +360,7 @@ def ibkr_observe(
                     (snapshot.visibility_scope_hash,),
                 ).fetchone()
                 authority = execution_store.latest_broker_snapshot_authority()
-                server_version = (
-                    int(broker.app.serverVersion())
-                    if hasattr(broker.app, "serverVersion")
-                    else None
-                )
+                server_version = broker.server_version
                 try:
                     ibapi_version = importlib.metadata.version("ibapi")
                 except importlib.metadata.PackageNotFoundError:
@@ -886,6 +882,57 @@ def local_onboard_install_ibapi(
     )
 
 
+@local_onboard_app.command("discover-ibkr-account")
+def local_onboard_discover_ibkr_account() -> None:
+    """Store the single authenticated Paper account in Keychain without displaying it."""
+
+    secrets, provider = _local_settings()
+    if secrets.hanalpha_env.lower() != "paper" or secrets.ibkr_port not in {4002, 7497}:
+        console.print(
+            json.dumps(
+                {
+                    "status": OperatorStatus.BLOCKED_HUMAN_ACTION,
+                    "blocker": "RESOLVE_PAPER_LIVE_ENVIRONMENT_AMBIGUITY",
+                    "secrets_redacted": True,
+                },
+                sort_keys=True,
+            )
+        )
+        raise typer.Exit(code=status_exit(OperatorStatus.BLOCKED_HUMAN_ACTION))
+    broker = IBKRBroker(
+        host=secrets.ibkr_host,
+        port=secrets.ibkr_port,
+        client_id=secrets.ibkr_client_id,
+        observer_only=True,
+    )
+    try:
+        account = asyncio.run(broker.discover_single_managed_account())
+        provider.set(LocalSecret.IBKR_ACCOUNT, account)
+    except (RuntimeError, TimeoutError, OSError):
+        console.print(
+            json.dumps(
+                {
+                    "status": OperatorStatus.FAILED_CODE,
+                    "blocker": "INSPECT_REDACTED_IBKR_ACCOUNT_DISCOVERY",
+                    "secrets_redacted": True,
+                },
+                sort_keys=True,
+            )
+        )
+        raise typer.Exit(code=status_exit(OperatorStatus.FAILED_CODE)) from None
+    console.print_json(
+        json.dumps(
+            {
+                "status": OperatorStatus.PASS,
+                "managed_account_count": 1,
+                "stored_in_keychain": True,
+                "secrets_redacted": True,
+            },
+            sort_keys=True,
+        )
+    )
+
+
 @local_onboard_app.command("migrate-env")
 def local_onboard_migrate_env(
     env_file: Annotated[Path, typer.Option("--env-file", exists=True, dir_okay=False)] = Path(
@@ -1028,7 +1075,11 @@ def e1_run(
                         "--input",
                         str(scope_root),
                         "--output",
-                        str(scope_root / "corpus.json"),
+                        str(
+                            scope_root
+                            / "corpora"
+                            / f"{progress['report_id']}.json"
+                        ),
                         "--registry",
                         secrets.hanalpha_artifact_registry_path,
                     ],

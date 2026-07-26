@@ -1,6 +1,6 @@
 # Active execution plan: complete Han Alpha platform
 
-Status: ACTIVE; E1-A/R1-A complete, E1-B/R1-B external evidence blocked
+Status: ACTIVE; E1-A/R1-A complete, E1-B authenticated empty-account slice verified
 Owner: Codex
 Last updated: 2026-07-26
 
@@ -81,6 +81,14 @@ Record important decisions here with date, alternatives, and consequences. Do no
   templates and a Registry-backed external acceptance panel. Independent signing
   and Evidence Passport are deliberately deferred until real E1/R1 evidence
   exists; human license acceptance, Paper login/2FA and data rights remain gates.
+- 2026-07-27: The operator installed and authenticated TWS Paper, accepted and
+  downloaded official API 10.48.1, and enabled port 7497. Han Alpha installed the
+  exact protobuf dependency, discovered the single account into native macOS
+  Keychain without disclosure, fixed current API callback/group/version behavior,
+  and captured five eligible empty-account API sessions with complete callbacks,
+  zero drops and converged reconciliation. Scenario-state validation now prevents
+  label-only coverage. E1-B remains blocked at genuine static-position/order and
+  restart/recovery/nightly/client-switch evidence; no Broker write occurred.
 
 ## Verification log
 

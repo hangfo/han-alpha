@@ -116,6 +116,7 @@ def test_ibapp_callbacks_normalize_redact_and_preserve_order_state(tmp_path) -> 
     app.execDetailsEnd(12)
     app.error(5, 201, "rejected")
     app.error(-1, 2104, "farm ok")
+    app.error(-1, 1_720_000_000, 2106, "farm connected", "")
     app.connectionClosed()
 
     facts = store.facts(session)
@@ -131,6 +132,8 @@ def test_ibapp_callbacks_normalize_redact_and_preserve_order_state(tmp_path) -> 
     assert app.order_events[-1].status == OrderStatus.ERROR
     assert app.order_events[0].status == OrderStatus.PARTIALLY_FILLED
     assert app.positions_cache == {}
+    assert app.managed_accounts == ("DU123",)
+    assert app.managed_accounts_event.is_set()
     assert canonical_account_count(["a", "b"]) == "accounts:2"
     store.close()
 
@@ -169,6 +172,7 @@ def _broker(app: _FakeIBApp) -> IBKRBroker:
     broker.account = "DU123"
     broker.app = app
     broker.thread = None
+    broker.server_version = None
     broker._idempotency = {}
     return broker
 
@@ -295,9 +299,45 @@ async def test_connect_alias_reaches_transport_readiness() -> None:
         def run(self) -> None:
             return None
 
+        def serverVersion(self) -> int:
+            return 188
+
     broker = _broker(App())
     await broker.connect(timeout=0.1)
     assert broker.thread is not None
+    assert broker.server_version == 188
+
+
+@pytest.mark.asyncio
+async def test_observer_only_account_discovery_requires_exactly_one_account() -> None:
+    class App(_FakeIBApp):
+        def __init__(self) -> None:
+            super().__init__()
+            self.connected_event = threading.Event()
+            self.managed_accounts_event = threading.Event()
+            self.managed_accounts = ("DU-REDACTED",)
+            self.disconnected = False
+
+        def connect(self, host: str, port: int, client_id: int) -> None:
+            self.connected_event.set()
+            self.managed_accounts_event.set()
+
+        def run(self) -> None:
+            return None
+
+        def disconnect(self) -> None:
+            self.disconnected = True
+
+    app = App()
+    broker = _broker(app)
+    broker.observer_only = True
+    account = await broker.discover_single_managed_account(timeout=0.1)
+    assert account == "DU-REDACTED"
+    assert app.disconnected
+
+    broker.observer_only = False
+    with pytest.raises(RuntimeError, match="observer-only"):
+        await broker.discover_single_managed_account(timeout=0.1)
 
 
 def test_constructor_fails_closed_without_official_ibapi() -> None:

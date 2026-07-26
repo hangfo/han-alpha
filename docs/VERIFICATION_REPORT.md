@@ -1,5 +1,48 @@
 # Verification report
 
+## Authenticated IBKR Paper onboarding and E1 empty-account slice - 2026-07-27
+
+Baseline: `1c56686df16eda41864bb35446b8aceabdc8aaaf`.
+
+VERIFIED:
+
+- TWS Paper is authenticated locally and listening on `127.0.0.1:7497`.
+- The user-accepted official `ibapi 10.48.1` archive is installed with exact
+  `protobuf 5.29.5`; imports and `pip check` pass.
+- The single managed Paper account was discovered and stored with the native
+  macOS Security framework. Its identifier is absent from argv, environment,
+  console output, immutable artifacts and Git.
+- Client ID `41` is supplied programmatically. TWS's optional Master API Client
+  ID remains blank.
+- Real callbacks covered server time/version, managed account, account summary,
+  positions, open/completed API orders, executions and every required end marker.
+- Five API-Scope `empty_account` sessions are self-verifying and safety-case
+  eligible. They have zero dropped facts, zero writer errors, complete scope and
+  converged reconciliation.
+- The observer structurally rejects place/cancel/global-cancel/exercise calls
+  even while TWS API Read-Only is disabled for full order-state visibility.
+- Scenario-state evidence rejects mislabeled empty/static-position/order captures;
+  progressive Corpus snapshots use immutable content-specific paths.
+- `./scripts/preflight.sh`: PASS with Python 3.12.13.
+- `./scripts/verify_all.sh`: PASS; 266 Python tests, one expected skip, 85.06%
+  branch-aware coverage, Ruff, strict mypy over 115 source files, package/CLI/
+  API/synthetic/backtest smoke checks, 2 Vitest tests, frontend lint/typecheck/
+  build and zero npm audit vulnerabilities.
+
+BLOCKED:
+
+- E1 API next scenario is genuine `static_position 0/5`; API orders, process/TWS
+  restarts, network recovery, nightly reset and client-ID switching also remain.
+- E1 ALL/manual-order corpus, commission/fill/cancel/bracket recovery and every
+  Broker write remain blocked. E2/E3 cannot start.
+- R1 vendor rights, credentials, real samples and independent review are unchanged.
+
+NOT IMPLEMENTED:
+
+- Automatic Paper event creation or TWS restart/network manipulation. These
+  events must be explicit, bounded and truthfully observed.
+- Any live order, unattended Paper order, production vendor adapter or proven Alpha.
+
 ## Issue #4 external acceptance hardening - 2026-07-26
 
 Baseline: `1465a100056420ea4a10a7eee8888b110259ffe6`.

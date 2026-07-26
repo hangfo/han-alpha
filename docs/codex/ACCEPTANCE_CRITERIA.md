@@ -102,6 +102,13 @@ Registry-backed外部验收面板。真实License接受、Paper登录/2FA、API/
 Callback Corpus、Vendor Rights/Samples和独立签名仍未发生，因此E1-B/R1-B
 继续不勾选。
 
+2026-07-27 用户已完成TWS Paper安装、登录/2FA、API许可证接受和官方ZIP下载。
+本机已安装`ibapi 10.48.1`/`protobuf 5.29.5`，7497真实监听，单一Paper账户通过
+原生macOS Keychain安全发现。API Scope已有5个合格`empty_account` Session，
+回调完整、零丢失且对账收敛；但`static_position`、API/ALL订单、重启/恢复/
+nightly reset/client切换和每个Broker写入仍未验证，所以IBKR Paper整项继续
+不勾选，E2/E3不得启动。
+
 ## 8. 工程质量
 
 - [x] Ruff通过。

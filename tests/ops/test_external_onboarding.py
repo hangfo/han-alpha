@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import subprocess
 import zipfile
 from datetime import UTC, datetime
@@ -12,6 +13,7 @@ from typer.testing import CliRunner
 import hanalpha.cli as cli_module
 import hanalpha.ops.external_runners as external_runners_module
 import hanalpha.ops.onboarding as onboarding_module
+import hanalpha.ops.secrets as secrets_module
 from hanalpha.cli import app
 from hanalpha.config import (
     SecretSettings,
@@ -71,6 +73,147 @@ def test_keychain_backend_never_places_secret_in_argv() -> None:
     assert calls[-1][1] == "top-secret\n"
 
 
+def test_native_keychain_provider_delegates_without_subprocess(monkeypatch) -> None:
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        secrets_module,
+        "_macos_keychain_get",
+        lambda service, account: calls.append(("get", service, account)) or "value",
+    )
+    monkeypatch.setattr(
+        secrets_module,
+        "_macos_keychain_set",
+        lambda service, account, value: calls.append(("set", service, account, value)),
+    )
+    provider = MacOSKeychainSecretProvider(service="test.service")
+    assert provider.get(LocalSecret.IBKR_ACCOUNT) == "value"
+    provider.set(LocalSecret.IBKR_ACCOUNT, "secret")
+    assert calls == [
+        ("get", "test.service", "ibkr-account"),
+        ("set", "test.service", "ibkr-account", "secret"),
+    ]
+
+
+class _FakeNativeFunction:
+    def __init__(self, result=0) -> None:
+        self.result = result
+        self.restype = None
+        self.argtypes = None
+
+    def __call__(self, *args):
+        return self.result
+
+
+class _FakeSecurityFramework:
+    def __init__(self) -> None:
+        self.SecKeychainFindGenericPassword = _FakeNativeFunction()
+        self.SecKeychainAddGenericPassword = _FakeNativeFunction()
+        self.SecKeychainItemModifyAttributesAndData = _FakeNativeFunction()
+        self.SecKeychainItemFreeContent = _FakeNativeFunction()
+
+
+class _FakeCoreFoundation:
+    def __init__(self) -> None:
+        self.CFRelease = _FakeNativeFunction()
+
+
+def test_native_keychain_framework_and_find_bridge(monkeypatch) -> None:
+    security = _FakeSecurityFramework()
+    core = _FakeCoreFoundation()
+    loaded = iter((security, core))
+    monkeypatch.setattr(secrets_module.ctypes, "CDLL", lambda _path: next(loaded))
+    assert secrets_module._macos_security_framework() == (security, core)
+    assert security.SecKeychainFindGenericPassword.restype is ctypes.c_int32
+    assert core.CFRelease.argtypes == [ctypes.c_void_p]
+
+    password = ctypes.create_string_buffer(b"secret")
+
+    def find(*args):
+        ctypes.cast(args[5], ctypes.POINTER(ctypes.c_uint32)).contents.value = 6
+        ctypes.cast(args[6], ctypes.POINTER(ctypes.c_void_p)).contents.value = (
+            ctypes.addressof(password)
+        )
+        ctypes.cast(args[7], ctypes.POINTER(ctypes.c_void_p)).contents.value = 123
+        return 0
+
+    security.SecKeychainFindGenericPassword = find
+    monkeypatch.setattr(
+        secrets_module,
+        "_macos_security_framework",
+        lambda: (security, core),
+    )
+    result = secrets_module._macos_keychain_find("service", "account")
+    assert result[2:4] == (0, 6)
+    assert ctypes.string_at(result[4], result[3]) == b"secret"
+    assert result[5].value == 123
+
+
+def test_native_keychain_get_and_set_paths(monkeypatch) -> None:
+    password = ctypes.create_string_buffer(b"secret")
+    security = _FakeSecurityFramework()
+    core = _FakeCoreFoundation()
+    released: list[int | None] = []
+    freed: list[int | None] = []
+    core.CFRelease = lambda pointer: released.append(pointer.value)
+    security.SecKeychainItemFreeContent = (
+        lambda _attributes, pointer: freed.append(pointer.value) or 0
+    )
+
+    def found(status: int):
+        return (
+            security,
+            core,
+            status,
+            6,
+            ctypes.c_void_p(ctypes.addressof(password)),
+            ctypes.c_void_p(123),
+        )
+
+    monkeypatch.setattr(secrets_module, "_macos_keychain_find", lambda *_: found(0))
+    assert secrets_module._macos_keychain_get("service", "account") == "secret"
+    assert freed and released == [123]
+
+    monkeypatch.setattr(
+        secrets_module,
+        "_macos_keychain_find",
+        lambda *_: found(secrets_module.ERR_SEC_ITEM_NOT_FOUND),
+    )
+    assert secrets_module._macos_keychain_get("service", "account") is None
+    monkeypatch.setattr(secrets_module, "_macos_keychain_find", lambda *_: found(-1))
+    with pytest.raises(RuntimeError, match="Keychain lookup failed"):
+        secrets_module._macos_keychain_get("service", "account")
+
+    monkeypatch.setattr(secrets_module, "_macos_keychain_find", lambda *_: found(0))
+    security.SecKeychainItemModifyAttributesAndData = lambda *_: 0
+    secrets_module._macos_keychain_set("service", "account", "updated")
+    security.SecKeychainItemModifyAttributesAndData = lambda *_: 7
+    with pytest.raises(RuntimeError, match="Keychain update failed"):
+        secrets_module._macos_keychain_set("service", "account", "updated")
+
+    created_item = ctypes.c_void_p(456)
+
+    def create(*args):
+        ctypes.cast(args[7], ctypes.POINTER(ctypes.c_void_p)).contents.value = (
+            created_item.value
+        )
+        return 0
+
+    monkeypatch.setattr(
+        secrets_module,
+        "_macos_keychain_find",
+        lambda *_: found(secrets_module.ERR_SEC_ITEM_NOT_FOUND),
+    )
+    security.SecKeychainAddGenericPassword = create
+    secrets_module._macos_keychain_set("service", "account", "created")
+    assert 456 in released
+    security.SecKeychainAddGenericPassword = lambda *_: 9
+    with pytest.raises(RuntimeError, match="Keychain create failed"):
+        secrets_module._macos_keychain_set("service", "account", "created")
+    monkeypatch.setattr(secrets_module, "_macos_keychain_find", lambda *_: found(-1))
+    with pytest.raises(RuntimeError, match="Keychain lookup failed"):
+        secrets_module._macos_keychain_set("service", "account", "created")
+
+
 def test_secret_child_uses_stdin_ipc_and_scrubs_inherited_environment(monkeypatch) -> None:
     captured = {}
 
@@ -116,6 +259,7 @@ def test_official_ibapi_installer_requires_attestation_and_rejects_traversal(
 
     calls: list[list[str]] = []
     monkeypatch.setattr(onboarding_module, "_ibapi_version", lambda: "10.48.1")
+    monkeypatch.setattr(onboarding_module, "_ibapi_importable", lambda: True)
     version = install_official_ibapi_archive(
         valid,
         license_accepted=True,
@@ -125,19 +269,33 @@ def test_official_ibapi_installer_requires_attestation_and_rejects_traversal(
         ),
     )
     assert version == "10.48.1"
-    assert calls[0][:4] == [
+    assert calls[0][-1] == "protobuf==5.29.5"
+    assert calls[1][:4] == [
         onboarding_module.sys.executable,
         "-m",
         "pip",
         "install",
     ]
-    assert "--no-deps" in calls[0]
+    assert "--no-deps" in calls[1]
 
     unsafe = tmp_path / "twsapi-unsafe.zip"
     with zipfile.ZipFile(unsafe, "w") as bundle:
         bundle.writestr("../escape", "bad")
     with pytest.raises(ValueError, match="UNSAFE_ARCHIVE_MEMBER"):
         install_official_ibapi_archive(unsafe, license_accepted=True)
+
+
+def test_ibkr_application_detection_supports_nested_macos_install(
+    tmp_path, monkeypatch
+) -> None:
+    nested = tmp_path / "Applications" / "Trader Workstation"
+    nested.mkdir(parents=True)
+    application = nested / "Trader Workstation.app"
+    application.mkdir()
+    monkeypatch.setattr(onboarding_module.Path, "home", lambda: tmp_path)
+    detected = onboarding_module._ibkr_applications()
+    assert application in detected
+    assert onboarding_module._app_kind(application) == "TWS"
 
 
 def test_secret_provider_failure_paths_remain_value_free(tmp_path) -> None:
@@ -280,7 +438,8 @@ def test_local_detection_helpers_are_bounded_and_non_mutating() -> None:
     assert isinstance(onboarding_module._ibkr_applications(), tuple)
     assert isinstance(onboarding_module._api_archives(), tuple)
     assert onboarding_module._port_ready("127.0.0.1", 1) is False
-    assert onboarding_module._ibapi_version() is None
+    version = onboarding_module._ibapi_version()
+    assert version is None or isinstance(version, str)
     assert onboarding_module._app_kind(Path("TWS.app")) == "TWS"
     attempts = iter((False, True))
     assert wait_for_ibkr_socket(
@@ -572,6 +731,9 @@ def test_e1_cli_ready_path_runs_one_redacted_child_capture(tmp_path, monkeypatch
     assert all("DU-LOCAL" not in " ".join(arguments) for arguments in child_calls)
     assert "--read-only-attested" in child_calls[0]
     assert child_calls[2][0] == "ibkr-burn-in-evaluate"
+    corpus_output = child_calls[2][child_calls[2].index("--output") + 1]
+    assert "/corpora/" in corpus_output
+    assert corpus_output.endswith(f"/{'2' * 64}.json")
     assert "secrets_redacted=true" in result.output
 
 

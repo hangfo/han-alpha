@@ -36,7 +36,12 @@ def _barrier() -> ObserverRequestBarrier:
     )
 
 
-def _semantic_facts(collector: IBKRCallbackCollector, *, cash: str = "100000") -> None:
+def _semantic_facts(
+    collector: IBKRCallbackCollector,
+    *,
+    cash: str = "100000",
+    omitted_account_tags: frozenset[str] = frozenset(),
+) -> None:
     barrier = collector.barrier
     assert barrier is not None
     collector.record(IBKRFactType.CONNECTION, {}, identity_key="connected", at=NOW)
@@ -55,6 +60,8 @@ def _semantic_facts(collector: IBKRCallbackCollector, *, cash: str = "100000") -
         ("BuyingPower", cash),
         ("AccruedCash", "0"),
     ):
+        if tag in omitted_account_tags:
+            continue
         collector.record(
             IBKRFactType.ACCOUNT_VALUE,
             {
@@ -128,6 +135,58 @@ def test_semantic_certificate_rejects_wrong_request_barrier(tmp_path) -> None:
         assert not wrong.certificate(
             store, at=NOW, queue_drained=True, final_watermark=13
         ).request_ids_match
+    finally:
+        store.close()
+
+
+def test_optional_account_summary_tags_do_not_block_completeness(tmp_path) -> None:
+    store = IBKRFactStore(tmp_path / "observer.sqlite3")
+    session = store.start_session(host="127.0.0.1", port=7497, client_id=19, at=NOW)
+    collector = IBKRCallbackCollector(
+        store,
+        session,
+        barrier=_barrier(),
+        configured_account=ACCOUNT,
+        base_currency="USD",
+        client_id=19,
+    )
+    try:
+        _semantic_facts(
+            collector,
+            omitted_account_tags=frozenset({"SettledCash", "AccruedCash"}),
+        )
+        certificate = collector.certificate(
+            store, at=NOW, queue_drained=True, final_watermark=10
+        )
+        assert certificate.required_account_tags_seen
+        assert certificate.cash_snapshot_complete
+        assert certificate.complete
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("missing_tag", ["NetLiquidation", "TotalCashValue", "BuyingPower"])
+def test_missing_authoritative_account_tag_rejects_completeness(
+    tmp_path, missing_tag: str
+) -> None:
+    store = IBKRFactStore(tmp_path / f"{missing_tag}.sqlite3")
+    session = store.start_session(host="127.0.0.1", port=7497, client_id=19, at=NOW)
+    collector = IBKRCallbackCollector(
+        store,
+        session,
+        barrier=_barrier(),
+        configured_account=ACCOUNT,
+        base_currency="USD",
+        client_id=19,
+    )
+    try:
+        _semantic_facts(collector, omitted_account_tags=frozenset({missing_tag}))
+        certificate = collector.certificate(
+            store, at=NOW, queue_drained=True, final_watermark=10
+        )
+        assert not certificate.required_account_tags_seen
+        assert not certificate.cash_snapshot_complete
+        assert not certificate.complete
     finally:
         store.close()
 
@@ -371,8 +430,8 @@ class _ObserverFakeApp:
             at=NOW,
         )
 
-    def reqAccountSummary(self, request_id: int, account: str, _tags: str) -> None:
-        assert self.observer and account == ACCOUNT
+    def reqAccountSummary(self, request_id: int, account_group: str, _tags: str) -> None:
+        assert self.observer and account_group == "All"
         for tag, value in (
             ("NetLiquidation", "100000"),
             ("TotalCashValue", "100000"),
@@ -384,7 +443,7 @@ class _ObserverFakeApp:
                 IBKRFactType.ACCOUNT_VALUE,
                 {
                     "request_id": request_id,
-                    "account_hash": account_hash(account),
+                    "account_hash": account_hash(ACCOUNT),
                     "tag": tag,
                     "value": value,
                     "currency": "USD",

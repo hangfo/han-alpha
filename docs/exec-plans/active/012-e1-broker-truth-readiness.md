@@ -1,6 +1,6 @@
 # E1 execution plan: Broker Truth Readiness
 
-Status: E1-A EVIDENCE INTEGRITY COMPLETE; E1-B BROKER ACCEPTANCE BLOCKED
+Status: E1-A COMPLETE; E1-B AUTHENTICATED EMPTY-ACCOUNT SLICE VERIFIED, MATRIX BLOCKED
 Owner: Codex and operator
 Started: 2026-07-26
 
@@ -50,6 +50,13 @@ capability.
   paper/live environment, host/port instance and redacted account hash.
 - The read-only Ops view exposes verified API/ALL acceptance counts without
   turning planned sessions into evidence.
+- Official `ibapi 10.48.1` plus `protobuf 5.29.5` is installed from the
+  user-downloaded licensed ZIP. Native macOS Security-framework Keychain access
+  avoids the `security -w` empty-value behavior observed on this machine.
+- TWS Paper port 7497 and one redacted managed account passed real transport,
+  Preflight and complete callback observation with Client ID 41.
+- Five API-Scope `empty_account` sessions are eligible, zero-drop and reconciled.
+  Scenario-state gates now reject empty/static-position/order label mismatches.
 
 ## External sequence
 
@@ -68,9 +75,10 @@ capability.
    cancel and Bracket tapes.
 8. Replay callback permutation/duplication/delay cases deterministically.
 
-The current machine stops before step 1: neither TWS/Gateway nor official
-`ibapi` is detected, no Paper port listens, and no Paper account is stored.
-This is `BLOCKED_HUMAN_ACTION`, not a code failure.
+Steps 1-4 and the API `empty_account 5/5` slice are complete. The runner now
+stops at `static_position 0/5`; the operator must create a genuine bounded Paper
+position before another capture. API/ALL order, process/TWS restart, network
+recovery, nightly reset and client-switch windows remain `BLOCKED_HUMAN_ACTION`.
 
 ## Exit gate
 

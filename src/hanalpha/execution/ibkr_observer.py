@@ -672,9 +672,7 @@ class IBKRCallbackCollector:
     _REQUIRED_TAGS: ClassVar[set[str]] = {
         "NetLiquidation",
         "TotalCashValue",
-        "SettledCash",
         "BuyingPower",
-        "AccruedCash",
     }
 
     def __init__(
