@@ -79,6 +79,7 @@ hanalpha ibkr-burn-in \
   --control .state/execution-control.sqlite3 \
   --sessions 30 \
   --completed-orders-scope api \
+  --capture-scenario empty_account \
   --output .state/burn-in/api
 
 hanalpha ibkr-burn-in \
@@ -86,11 +87,23 @@ hanalpha ibkr-burn-in \
   --control .state/execution-control.sqlite3 \
   --sessions 10 \
   --completed-orders-scope all \
+  --capture-scenario manual_order \
   --output .state/burn-in/all
+
+hanalpha ibkr-burn-in-evaluate \
+  --input .state/burn-in/api \
+  --output .state/burn-in/api-corpus.json
+
+hanalpha ibkr-burn-in-evaluate \
+  --input .state/burn-in/all \
+  --output .state/burn-in/all-corpus.json
 ```
 
 `all` is a different Scope and is intended to test manually submitted TWS
-Completed Orders. Its votes never count toward the `api` Scope.
+Completed Orders. Its votes never count toward the `api` Scope. The two sample
+capture commands are not the complete matrix: use separate immutable sessions for
+process/TWS restart, network recovery, nightly reset and client-ID switching.
+`capture` preserves facts; only `evaluate` can return PASS.
 
 ## Real PIT source order
 
@@ -122,7 +135,7 @@ SEC access policy:
 Configure:
 
 ```dotenv
-SEC_USER_AGENT=HanAlphaResearch contact@example.com
+SEC_USER_AGENT=HanAlphaResearch operations@your-real-domain.tld
 ```
 
 Acceptance time, amendment lineage, historical CIK/ticker mapping and next
@@ -147,14 +160,31 @@ Credential presence:
 hanalpha pit vendor-preflight
 ```
 
+This reports `credentials_present_for`, never `ready_sources`. SEC identification
+must include a project name and a non-placeholder contact email; only its SHA256
+and the request-throttle policy hash are persisted.
+
 Fail-closed source qualification:
 
 ```bash
 hanalpha pit qualify-source \
   --profile configs/data-sources/massive-price-profile.json \
-  --output .state/pit/qualifications/massive.json
+  --registry .state/evidence-artifacts.sqlite3 \
+  --output .state/pit/qualifications/massive
 ```
 
 The repository templates intentionally exit with code 2 until all required
-license, timestamp, survivorship and revision evidence is VERIFIED. Only then
-should a vendor adapter publish a real PIT snapshot or run a return experiment.
+license, timestamp, survivorship and revision evidence resolves to registered,
+unexpired artifacts with independent Ed25519 Reviewer Receipts. A profile edited
+to say `VERIFIED` cannot qualify itself. Only `PROMOTION_QUALIFIED` data may publish
+a promotion-grade PIT snapshot or enter R2.
+
+Runtime configuration contains public keys only:
+
+```dotenv
+HANALPHA_SAFETY_CASE_PUBLIC_KEYS={"risk-key":"<base64-raw-ed25519-public-key>","execution-key":"<base64-raw-ed25519-public-key>"}
+HANALPHA_ARTIFACT_REGISTRY_PATH=.state/evidence-artifacts.sqlite3
+```
+
+Private reviewer keys must remain offline and outside the repository, runtime
+environment and application database.

@@ -16,9 +16,10 @@
 ## Read-only burn-in sequence
 
 - Start TWS/IB Gateway and authenticate with supported 2FA.
-- Run `hanalpha ibkr-burn-in --state .state/ibkr-observer.sqlite3 --control
-  .state/execution-control.sqlite3 --sessions 30 --completed-orders-scope api
-  --output .state/burn-in/api`.
+- Run scoped `hanalpha ibkr-burn-in` captures with explicit
+  `--capture-scenario`, then run `hanalpha ibkr-burn-in-evaluate`. Capture success
+  is not acceptance; the evaluator returns exit code 2 for incomplete stability
+  or scenario coverage.
 - Require `complete=true`; a TCP connection without all end markers is incomplete.
 - Require `accepted_facts == written_facts`, `dropped_facts == 0` and no writer error.
 - Track complete observations separately from consecutive stable Authority sessions; a divergent reset is not a stable vote.

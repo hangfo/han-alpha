@@ -1,6 +1,53 @@
 # Verification report
 
-## E1/R1 local evidence entry - 2026-07-26
+## E1-A/R1-A evidence-authority closure - 2026-07-26
+
+Baseline: `778fac41b95efde6e0a8551cd455732754e58b54`.
+
+Detailed review decisions:
+`docs/v2-plan/18_E1_R1_REVIEW_AND_EVIDENCE_AUTHORITY_ZH.md`.
+
+VERIFIED:
+
+- Burn-in Session v2 re-verifies its canonical identity, exact file set and
+  hashes, Certificate bindings, single-session Tape and observation directory.
+- Burn-in capture is not acceptance. A separate Corpus evaluator requires
+  homogeneous bindings, eligible sessions, stable consecutive consensus and
+  Scope-specific scenario coverage; BLOCKED exits nonzero.
+- The immutable typed Artifact Registry resolves every Safety Case and PIT
+  evidence hash back to a present, hash-valid, schema-valid, policy-passing file.
+- Safety Case trust uses two independent offline Ed25519 reviews (Risk and
+  Execution) bound to the exact case hash. Runtime contains public keys only.
+- Source qualification requires type-correct registered evidence, bounded
+  expiry and an independently signed review receipt. Caller-provided
+  `VERIFIED` text cannot authorize research or promotion.
+- Vendor preflight distinguishes credential presence from access readiness,
+  redacts secret values and rejects unidentified or placeholder SEC User-Agents.
+- Local zero-network preflights remained fail-closed: IBKR API/account/socket
+  readiness was false and all three vendor access-readiness sets were empty.
+  No Broker, vendor or LLM request was attempted.
+- `./scripts/preflight.sh`: PASS in the repository Python 3.12.13 environment.
+- `./scripts/verify_all.sh`: PASS; 223 Python tests, 85.09% branch-aware
+  coverage, Ruff, strict mypy over 107 source files, sdist/wheel and
+  CLI/API/synthetic/backtest smoke checks, 2 Vitest tests, frontend
+  lint/typecheck and Vite production build.
+- `npm audit`: zero vulnerabilities. `git diff --check`: PASS.
+
+BLOCKED:
+
+- E1-B: authenticated IBKR Paper preflight, API/all Burn-in matrix, resets,
+  Golden Tapes, cancel/Bracket/account/calendar proof and issued Safety Case.
+- R1-B: written vendor rights, entitlement probes, bounded raw samples,
+  timestamp/revision/symbology/survivorship audits and approved profiles.
+- R2: real PIT out-of-sample, friction, capacity and forward/shadow evidence.
+
+NOT IMPLEMENTED:
+
+- E2 one-use Canary Permit and E3 first human-approved Paper order.
+- Production vendor ingestion and any real-data strategy promotion.
+- Unattended Paper or live trading; no `live_auto` state exists.
+
+## E1/R1 local evidence entry (superseded authority design) - 2026-07-26
 
 Baseline: `99053d998a6fdff10b4b996c475ffed8dcaa0289`.
 

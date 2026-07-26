@@ -75,6 +75,10 @@ Before considering alpha credible:
 - `api` and `all` Completed Orders requests generate different Scope hashes;
 - each Observer session exports one isolated tape, certificate and immutable
   hash-verified manifest;
+- Manifest ID, Tape/Certificate cross-binding, Scope/Account/Normalization and
+  idempotent full-document equality reject tampering;
+- Corpus evaluation rejects mixed bindings, incomplete Sessions, fact drops,
+  unstable consensus and missing Scope-specific restart/order coverage;
 - Arm/Claim reject expired Quote, Provider, Authority, Approval or Reservation evidence;
 - unrelated Heartbeats and unsigned Safety Case Booleans cannot satisfy readiness;
 - current-Scope Burn-in never inherits a different Scope's stable count.
@@ -84,4 +88,6 @@ Before considering alpha credible:
 - missing license, cache, revision, survivorship or availability-time evidence
   blocks qualification;
 - credential preflight exposes only configured/not-configured state;
+- placeholder SEC identification, self-reported VERIFIED checks, missing/expired
+  artifacts and absent/invalid reviewer signatures fail closed;
 - initial vendor templates remain BLOCKED until external evidence is attached.

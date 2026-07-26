@@ -144,7 +144,8 @@ class SecretSettings(BaseSettings):
     ibkr_account: str | None = None
     hanalpha_broker_write_token: SecretStr | None = None
     hanalpha_operator_token: SecretStr | None = None
-    hanalpha_safety_case_verification_key: SecretStr | None = None
+    hanalpha_safety_case_public_keys: str | None = None
+    hanalpha_artifact_registry_path: str = ".state/evidence-artifacts.sqlite3"
 
 
 def load_config(path: str | Path | None = None) -> tuple[AppConfig, SecretSettings]:

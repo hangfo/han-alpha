@@ -40,11 +40,14 @@ R1 requires a passing immutable source qualification before production ingestion
 hanalpha pit vendor-preflight
 hanalpha pit qualify-source \
   --profile configs/data-sources/massive-price-profile.json \
-  --output .state/pit/qualifications/massive.json
+  --registry .state/evidence-artifacts.sqlite3 \
+  --output .state/pit/qualifications/massive
 ```
 
 The repository Massive, SEC and FRED/ALFRED profiles intentionally remain BLOCKED
-until license, retention, timestamp, revision and survivorship evidence is supplied.
+until license, retention, timestamp, revision and survivorship evidence is supplied
+as registered immutable artifacts with an unexpired independent reviewer signature.
+Caller-written `VERIFIED` text has no authority.
 
 ### SEC EDGAR
 

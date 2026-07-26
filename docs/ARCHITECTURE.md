@@ -60,6 +60,12 @@
 - R1 blocks vendor publication until the intended-use license, PIT, revision,
   timestamp and survivorship profile passes. E1 and R1 are independent evidence
   streams under the post-M7-B.1 architecture freeze.
+- E1-A/R1-A add a shared evidence-authority boundary: registered files are
+  rehashed and schema/policy checked on every resolution. Burn-in Corpus roots
+  bind homogeneous Session Manifests and a Scope-specific coverage matrix.
+- Runtime processes contain Ed25519 public keys only. Safety Cases require
+  independent Risk and Execution receipts; data qualification requires an
+  unexpired signed reviewer receipt for every typed evidence artifact.
 
 ### Control plane
 

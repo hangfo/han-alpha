@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-07-26 — E1-A/R1-A evidence authority
+
+- Made Burn-in Manifest v2 self-verifying across canonical identity, files,
+  Certificate, Tape, Scope and current capture inputs.
+- Added a typed Artifact Registry/Resolver and Scope-specific Burn-in Corpus
+  evaluator with nonzero BLOCKED exit and scenario coverage gates.
+- Replaced symmetric Safety Case HMAC with runtime-only Ed25519 public-key
+  verification and independent Risk/Execution reviewer receipts.
+- Prevented PIT Profiles from self-authorizing: qualification now requires
+  registered, unexpired, type-correct artifacts and signed independent reviews.
+- Renamed credential output to `credentials_present_for`, added strict redacted
+  SEC User-Agent validation and separated research from promotion qualification.
+- Verified 223 Python tests at 85.09% branch-aware coverage, strict mypy over
+  107 source files, package/CLI/API/research smoke checks, frontend tests and
+  production build. No Broker, vendor or LLM request was made.
+
 ## 2026-07-26 — E1/R1 evidence-stream entry
 
 - Added Completed Orders `api/all` Scope execution, redacted zero-write IBKR
@@ -8,7 +24,8 @@
 - Propagated the earliest Authority/Quote/Approval/Reservation deadline into Arm
   expiry and revalidated the same quote policy at Claim.
 - Replaced caller-stored Safety Case Booleans with canonical ID, status, expiry,
-  revocation, Scope, evidence-hash and HMAC verification.
+  revocation, Scope and evidence-hash verification; ADR 0011 subsequently
+  supersedes the local HMAC trusted root with offline Ed25519 review.
 - Added explicit per-layer Heartbeat sets and separated quote evidence eligibility
   from an unverified intent binding.
 - Added fail-closed Massive, SEC EDGAR and FRED/ALFRED PIT qualification profiles

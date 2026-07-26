@@ -1,5 +1,5 @@
 {
-  "schema_version": "pit-source-profile-v1",
+  "schema_version": "pit-source-profile-v2",
   "source_id": "sec-edgar-filings",
   "provider": "U.S. Securities and Exchange Commission",
   "product": "EDGAR submissions and XBRL APIs",

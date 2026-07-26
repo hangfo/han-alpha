@@ -10,6 +10,7 @@ from hanalpha.execution.control_models import BrokerSnapshot, QuoteSnapshot
 from hanalpha.execution.control_store import DurableExecutionStore
 from hanalpha.execution.ibkr_observer import IBKRFactStore
 from hanalpha.execution.safety_case import SafetyCaseVerification, verify_safety_case
+from hanalpha.ops.artifact_registry import ArtifactRegistry
 
 
 class OpsService:
@@ -24,11 +25,13 @@ class OpsService:
         store: DurableExecutionStore,
         *,
         observer_path: Path | None = None,
-        safety_case_verification_key: bytes | None = None,
+        safety_case_public_keys: dict[str, bytes] | None = None,
+        artifact_registry: ArtifactRegistry | None = None,
     ) -> None:
         self.store = store
         self.observer_path = observer_path
-        self.safety_case_verification_key = safety_case_verification_key
+        self.safety_case_public_keys = safety_case_public_keys
+        self.artifact_registry = artifact_registry
 
     @staticmethod
     def _age_seconds(value: str | None, now: datetime) -> float | None:
@@ -156,16 +159,15 @@ class OpsService:
         )
         safety_case_document = json.loads(safety_case["case_json"]) if safety_case else {}
         authority_snapshot = (
-            BrokerSnapshot.model_validate_json(authority["snapshot_json"])
-            if authority
-            else None
+            BrokerSnapshot.model_validate_json(authority["snapshot_json"]) if authority else None
         )
         safety_verification = (
             verify_safety_case(
                 safety_case_document,
                 database_status=str(safety_case["status"]),
                 at=observed_at,
-                verification_key=self.safety_case_verification_key,
+                verification_keys=self.safety_case_public_keys,
+                artifact_registry=self.artifact_registry,
                 expected_scope_hash=selected_scope,
                 expected_bindings={
                     "git_commit": (
@@ -187,9 +189,7 @@ class OpsService:
                         else None
                     ),
                     "normalization_policy_hash": (
-                        authority_snapshot.normalization_policy_hash
-                        if authority_snapshot
-                        else None
+                        authority_snapshot.normalization_policy_hash if authority_snapshot else None
                     ),
                 },
             )
@@ -199,6 +199,8 @@ class OpsService:
                 reasons=("NOT_ISSUED",),
                 safety_case_id=None,
                 evidence_checks={},
+                evidence_resolutions={},
+                reviewer_checks={},
             )
         )
         readiness = self.layered_readiness(
@@ -211,9 +213,7 @@ class OpsService:
             unknown=unknown,
             naked=int(naked["count"]),
             heartbeats=heartbeats,
-            quote_evidence_eligible=bool(
-                quote_admission is not None and quote_admission.eligible
-            ),
+            quote_evidence_eligible=bool(quote_admission is not None and quote_admission.eligible),
             safety_case_verification=safety_verification,
         )
         if selected_scope:
@@ -409,9 +409,7 @@ class OpsService:
 
         def required_heartbeat_checks(layer: str) -> dict[str, bool]:
             return {
-                f"heartbeat_{component.replace('-', '_')}": heartbeat_checks.get(
-                    component, False
-                )
+                f"heartbeat_{component.replace('-', '_')}": heartbeat_checks.get(component, False)
                 for component in required_heartbeats[layer]
             }
 

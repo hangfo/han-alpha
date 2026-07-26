@@ -22,6 +22,7 @@ dependencies = [
   "numpy>=2.2,<3",
   "python-dateutil>=2.9,<3",
   "duckdb>=1.5,<2",
+  "cryptography>=45,<47",
 ]
 
 [project.optional-dependencies]

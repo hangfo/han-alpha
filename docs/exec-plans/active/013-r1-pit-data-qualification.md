@@ -1,6 +1,6 @@
 # R1 execution plan: PIT Data Qualification
 
-Status: LOCAL QUALIFICATION GATE COMPLETE; vendor access and payload evidence BLOCKED
+Status: R1-A QUALIFICATION AUTHORITY COMPLETE; R1-B SOURCE ACCEPTANCE BLOCKED
 Owner: Codex and data owner
 Started: 2026-07-26
 
@@ -26,6 +26,12 @@ evidence by itself.
 - `hanalpha pit vendor-preflight` reports only credential presence and never
   serializes credential values.
 - Initial Massive, SEC EDGAR and FRED/ALFRED profiles are deliberately BLOCKED.
+- Profiles cannot self-authorize: every VERIFIED check must resolve a typed,
+  unexpired Artifact plus an independent Ed25519 Reviewer Receipt.
+- Reports distinguish exploratory `RESEARCH_QUALIFIED` from
+  `PROMOTION_QUALIFIED`; strategy promotion accepts only the latter.
+- Vendor Preflight reports credential presence only. It never labels a source
+  access-ready without license and entitlement evidence.
 
 ## Next external work
 

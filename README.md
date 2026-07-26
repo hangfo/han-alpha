@@ -66,7 +66,13 @@ Then visit `http://127.0.0.1:8000/docs`.
 5. Keep `configs/paper.yaml` and a paper-only client ID.
 6. Install the official Python API from the TWS API distribution so `import ibapi` works.
 7. Change `mode` only after adding a real market-data provider; change `execution.broker` to `ibkr` only for paper testing.
-8. Run `hanalpha ibkr-preflight --read-only-attested`, then scoped zero-write `ibkr-burn-in`; do not enable writes until E1 and E2 pass.
+8. Run `hanalpha ibkr-preflight --read-only-attested`, scoped zero-write
+   `ibkr-burn-in` captures, and `ibkr-burn-in-evaluate`; do not enable writes
+   until E1-B and E2 pass.
+
+See `docs/BROKER_AND_DATA_ONBOARDING.md` for external setup and
+`docs/R2_STRATEGY_AND_LLM_AGENT_POSITIONING.md` for the post-qualification
+strategy and LLM boundary.
 
 ## Architecture
 
@@ -99,7 +105,7 @@ hanalpha execution-approvals --control <control.sqlite3>
 hanalpha ibkr-preflight --read-only-attested
 hanalpha ibkr-observe --state .state/ibkr-observer.sqlite3 --control .state/execution-control.sqlite3 --completed-orders-scope api --timeout 15
 hanalpha pit vendor-preflight
-hanalpha pit qualify-source --profile configs/data-sources/massive-price-profile.json --output .state/pit/qualifications/massive.json
+hanalpha pit qualify-source --profile configs/data-sources/massive-price-profile.json --output .state/pit/qualifications/massive
 hanalpha serve --host 127.0.0.1 --port 8000
 pytest
 ruff check src tests

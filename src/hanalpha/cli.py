@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib.metadata
 import json
 import os
@@ -18,7 +19,10 @@ from hanalpha.backtest import BacktestEngine
 from hanalpha.config import load_config
 from hanalpha.data.fixtures import run_fixture_pipeline
 from hanalpha.data.synthetic import SyntheticMarketDataProvider
-from hanalpha.execution.burn_in import persist_burn_in_session
+from hanalpha.execution.burn_in import (
+    evaluate_burn_in_corpus,
+    persist_burn_in_session,
+)
 from hanalpha.execution.control_store import DurableExecutionStore
 from hanalpha.execution.fake_broker import DurableFakeBroker
 from hanalpha.execution.ibkr import IBKRBroker
@@ -34,6 +38,8 @@ from hanalpha.execution.worker import ExecutionWorker
 from hanalpha.experiments.models import ExperimentManifest, WindowRole
 from hanalpha.experiments.registry import ExperimentRegistry
 from hanalpha.experiments.runner import ExperimentRunner
+from hanalpha.ops.artifact_registry import ArtifactRegistry, ArtifactType
+from hanalpha.ops.artifacts import write_immutable_json
 from hanalpha.orchestrator import build_system
 from hanalpha.pit.catalog import PITCatalog
 from hanalpha.pit.qualification import (
@@ -188,9 +194,8 @@ def ibkr_observe(
     completed_orders_scope: Annotated[
         CompletedOrdersScope, typer.Option("--completed-orders-scope")
     ] = CompletedOrdersScope.API,
-    artifact_root: Annotated[Path, typer.Option("--artifact-root")] = Path(
-        ".state/burn-in"
-    ),
+    artifact_root: Annotated[Path, typer.Option("--artifact-root")] = Path(".state/burn-in"),
+    capture_scenario: Annotated[str, typer.Option("--capture-scenario")] = ("repeated_connection"),
 ) -> None:
     """Capture a read-only IBKR Paper fact tape and completeness certificate."""
 
@@ -237,6 +242,17 @@ def ibkr_observe(
                     at=datetime.now(UTC),
                     minimum_consensus_interval=timedelta(seconds=1),
                 )
+                vote = execution_store.connection.execute(
+                    """SELECT disposition, equivalence_json
+                       FROM broker_snapshot_votes WHERE observation_id=?""",
+                    (snapshot.observation_id,),
+                ).fetchone()
+                consensus = execution_store.connection.execute(
+                    """SELECT consecutive_count FROM broker_snapshot_consensus
+                       WHERE visibility_scope_hash=?""",
+                    (snapshot.visibility_scope_hash,),
+                ).fetchone()
+                authority = execution_store.latest_broker_snapshot_authority()
                 server_version = (
                     int(broker.app.serverVersion())
                     if hasattr(broker.app, "serverVersion")
@@ -258,6 +274,20 @@ def ibkr_observe(
                     reconciliation_status=report.status,
                     tws_server_version=server_version,
                     ibapi_version=ibapi_version,
+                    vote_disposition=str(vote["disposition"]) if vote else None,
+                    consensus_count_after_vote=(
+                        int(consensus["consecutive_count"]) if consensus else 0
+                    ),
+                    equivalence_receipt=(
+                        json.loads(vote["equivalence_json"])
+                        if vote and vote["equivalence_json"]
+                        else None
+                    ),
+                    authority_promoted=bool(
+                        authority
+                        and authority["certificate_id"] == snapshot.completeness_certificate_id
+                    ),
+                    capture_scenario=capture_scenario,
                 )
                 execution_store.record_heartbeat(
                     "broker-observer",
@@ -300,8 +330,9 @@ def ibkr_burn_in(
         CompletedOrdersScope, typer.Option("--completed-orders-scope")
     ] = CompletedOrdersScope.API,
     output: Annotated[Path, typer.Option("--output")] = Path(".state/burn-in"),
+    capture_scenario: Annotated[str, typer.Option("--capture-scenario")] = ("repeated_connection"),
 ) -> None:
-    """Run repeated zero-write Observer sessions with immutable per-session artifacts."""
+    """Capture repeated zero-write Observer sessions; this does not imply acceptance."""
 
     ibkr_observe(
         state_path=state_path,
@@ -310,7 +341,36 @@ def ibkr_burn_in(
         timeout=timeout,
         completed_orders_scope=completed_orders_scope,
         artifact_root=output,
+        capture_scenario=capture_scenario,
     )
+
+
+@app.command("ibkr-burn-in-evaluate")
+def ibkr_burn_in_evaluate(
+    input_root: Annotated[Path, typer.Option("--input", exists=True, file_okay=False)],
+    output: Annotated[Path, typer.Option("--output")],
+    minimum_sessions: Annotated[int | None, typer.Option("--minimum-sessions", min=1)] = None,
+    registry_path: Annotated[Path, typer.Option("--registry")] = Path(
+        ".state/evidence-artifacts.sqlite3"
+    ),
+) -> None:
+    """Evaluate captured sessions and fail nonzero unless the corpus passes."""
+
+    session_dirs = tuple(path for path in (input_root / "sessions").iterdir() if path.is_dir())
+    evaluation = evaluate_burn_in_corpus(session_dirs, minimum_sessions=minimum_sessions)
+    write_immutable_json(output, evaluation.corpus)
+    registry = ArtifactRegistry(registry_path)
+    try:
+        registry.register(
+            output,
+            artifact_type=ArtifactType.BURN_IN_CORPUS,
+            status="VERIFIED" if evaluation.decision == "PASS" else "REJECTED",
+        )
+    finally:
+        registry.close()
+    console.print_json(json.dumps(evaluation.corpus, sort_keys=True))
+    if evaluation.decision != "PASS":
+        raise typer.Exit(code=2)
 
 
 @app.command("ibkr-preflight")
@@ -355,29 +415,52 @@ def pit_ingest_fixture(
 def pit_qualify_source(
     profile_path: Annotated[Path, typer.Option("--profile", exists=True, dir_okay=False)],
     output: Annotated[Path, typer.Option("--output")],
+    registry_path: Annotated[Path, typer.Option("--registry")] = Path(
+        ".state/evidence-artifacts.sqlite3"
+    ),
 ) -> None:
     """Fail closed unless a vendor profile proves all PIT and license requirements."""
 
     profile = DataSourceProfile.model_validate_json(profile_path.read_text(encoding="utf-8"))
-    report = evaluate_source_profile(profile, at=datetime.now(UTC))
-    persist_qualification(output, report)
+    _, secrets = load_config()
+    reviewer_keys = (
+        {
+            str(key_id): base64.b64decode(str(value), validate=True)
+            for key_id, value in json.loads(secrets.hanalpha_safety_case_public_keys).items()
+        }
+        if secrets.hanalpha_safety_case_public_keys
+        else None
+    )
+    registry = ArtifactRegistry(registry_path)
+    try:
+        report = evaluate_source_profile(
+            profile,
+            at=datetime.now(UTC),
+            registry=registry,
+            reviewer_keys=reviewer_keys,
+        )
+    finally:
+        registry.close()
+    destination = output / f"{report.report_id}.json"
+    persist_qualification(destination, report)
     console.print_json(report.model_dump_json())
-    if report.decision != "QUALIFIED":
+    console.print(f"artifact={destination}")
+    if report.decision.value != "PROMOTION_QUALIFIED":
         raise typer.Exit(code=2)
 
 
 @pit_app.command("vendor-preflight")
 def pit_vendor_preflight(
-    output: Annotated[Path, typer.Option("--output")] = Path(
-        ".state/pit/vendor-preflight.json"
-    ),
+    output: Annotated[Path, typer.Option("--output")] = Path(".state/pit/vendor-preflight"),
 ) -> None:
     """Report configured vendor access without exposing any credential value."""
 
     _, secrets = load_config()
     artifact = vendor_access_preflight(secrets, at=datetime.now(UTC))
-    persist_qualification(output, artifact)
+    destination = output / f"{artifact['artifact_id']}.json"
+    persist_qualification(destination, artifact)
     console.print_json(json.dumps(artifact, sort_keys=True))
+    console.print(f"artifact={destination}")
 
 
 @pit_app.command("quality")

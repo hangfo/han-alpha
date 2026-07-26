@@ -1,5 +1,5 @@
 {
-  "schema_version": "pit-source-profile-v1",
+  "schema_version": "pit-source-profile-v2",
   "source_id": "fred-alfred-macro",
   "provider": "Federal Reserve Bank of St. Louis",
   "product": "FRED and ALFRED API",

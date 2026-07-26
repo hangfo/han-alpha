@@ -82,6 +82,10 @@ Budget传播、当前Scope Burn-in和Safety Case Verifier；R1加入真实数据
 当前机器缺少官方`ibapi`、Paper端口、Paper账户和Vendor凭证，因此这些新增
 本地合同仍不能勾选真实Broker或真实PIT验收。
 
+E1-A/R1-A进一步拒绝Hash形状和Profile自报结论：Session/Corpus必须可解析并
+重验，Safety Case采用离线Ed25519双Reviewer，数据资格需要带Expiry的Artifact
+与Reviewer Receipt。E1-B/R1-B真实环境和样本仍未完成，相关外部条目不勾选。
+
 ## 8. 工程质量
 
 - [x] Ruff通过。

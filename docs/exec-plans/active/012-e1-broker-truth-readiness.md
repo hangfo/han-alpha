@@ -1,6 +1,6 @@
 # E1 execution plan: Broker Truth Readiness
 
-Status: LOCAL TOOLING COMPLETE; authenticated Paper evidence BLOCKED
+Status: E1-A EVIDENCE INTEGRITY COMPLETE; E1-B BROKER ACCEPTANCE BLOCKED
 Owner: Codex and operator
 Started: 2026-07-26
 
@@ -22,6 +22,13 @@ capability.
   the current Authority and quote evidence.
 - Safety Case Booleans are not trusted; integrity, signature, validity, revocation,
   current Scope and evidence hashes must verify.
+- Session Manifest v2 self-verifies its canonical ID, Tape, Certificate and all
+  Broker/Scope bindings; incomplete captures are retained but ineligible.
+- Artifact Registry/Resolver checks existence, hash, type, schema and policy.
+- `ibkr-burn-in-evaluate` emits a homogeneous Corpus and exits 2 unless its
+  Scope-specific session and scenario matrix passes.
+- Runtime holds Ed25519 public keys only; Risk and Execution reviewer receipts
+  must be independent and bind the exact Safety Case.
 
 ## External sequence
 
@@ -29,8 +36,9 @@ capability.
 2. Set Paper account, port, client ID and base currency locally.
 3. Keep API Read-Only enabled and record the operator attestation.
 4. Pass `ibkr-preflight`.
-5. Run 30 `api` Scope observations on a controlled Paper account.
-6. Run at least 10 `all` Scope observations including manual TWS orders.
+5. Capture the preregistered `api` Scope matrix with explicit
+   `--capture-scenario` labels; evaluate it separately.
+6. Capture and evaluate the `all` Scope matrix including manual TWS orders.
 7. Capture restart, nightly-reset, late-commission, correction, partial-fill,
    cancel and Bracket tapes.
 8. Replay callback permutation/duplication/delay cases deterministically.
@@ -43,5 +51,7 @@ capability.
 - at least one process restart, two TWS/Gateway restarts and one nightly reset;
 - Golden Tape corpus passes order-independent replay;
 - no Broker write was available to the observation process.
+- Corpus coverage proves restarts, recovery, client switching and order visibility;
+  repeated empty-account reconnects cannot satisfy the gate.
 
 Until this gate passes, E2 and every real Writer remain BLOCKED.

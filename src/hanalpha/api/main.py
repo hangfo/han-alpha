@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -13,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from hanalpha.config import load_config
 from hanalpha.ops import OpsService
+from hanalpha.ops.artifact_registry import ArtifactRegistry
 from hanalpha.orchestrator import TradingSystem, build_system
 from hanalpha.portfolio import Ledger
 
@@ -42,7 +45,8 @@ class AppState:
     system: TradingSystem | None = None
     ledger: Ledger | None = None
     observer_path: Path | None = None
-    safety_case_verification_key: bytes | None = None
+    safety_case_public_keys: dict[str, bytes] | None = None
+    artifact_registry: ArtifactRegistry | None = None
 
 
 state = AppState()
@@ -56,14 +60,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     state.system = system
     state.ledger = ledger
     state.observer_path = Path(secrets.hanalpha_ibkr_observer_path)
-    state.safety_case_verification_key = (
-        secrets.hanalpha_safety_case_verification_key.get_secret_value().encode()
-        if secrets.hanalpha_safety_case_verification_key
+    state.safety_case_public_keys = (
+        {
+            str(key_id): base64.b64decode(str(value), validate=True)
+            for key_id, value in json.loads(secrets.hanalpha_safety_case_public_keys).items()
+        }
+        if secrets.hanalpha_safety_case_public_keys
         else None
     )
-    yield
-    system.close()
-    ledger.close()
+    if state.safety_case_public_keys and any(
+        len(value) != 32 for value in state.safety_case_public_keys.values()
+    ):
+        raise ValueError("Safety Case Ed25519 public keys must be 32 raw bytes")
+    state.artifact_registry = ArtifactRegistry(Path(secrets.hanalpha_artifact_registry_path))
+    try:
+        yield
+    finally:
+        state.artifact_registry.close()
+        system.close()
+        ledger.close()
 
 
 app = FastAPI(
@@ -84,7 +99,8 @@ def get_ops() -> OpsService:
     return OpsService(
         get_system().execution_store,
         observer_path=state.observer_path,
-        safety_case_verification_key=state.safety_case_verification_key,
+        safety_case_public_keys=state.safety_case_public_keys,
+        artifact_registry=state.artifact_registry,
     )
 
 
