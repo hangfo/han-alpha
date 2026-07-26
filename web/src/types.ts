@@ -14,6 +14,10 @@ export type OpsOverview = {
   heartbeats: Array<{ component: string; status: string; observed_at: string; age_seconds: number | null }>;
   backup: { status: string; age_seconds: number | null; generation_id?: string; integrity?: string };
   evidence_registry: { total: number; verified: number; type_counts: Record<string, number>; status_counts: Record<string, number>; recent: Array<{ artifact_id: string; artifact_type: string; schema_version: string; created_at: string; status: string; verified: boolean; reasons: string[] }> };
+  external_acceptance: {
+    e1: Record<"api" | "all", { completed: number; required: number; decision: string; counts?: Record<string, number>; requirements?: Record<string, number> }>;
+    r1: Record<"sec_edgar" | "fred_alfred" | "massive", { sample_manifests: number; decision: string }>;
+  };
   burn_in: { scope_hash: string | null; scope_policy?: { completed_orders_api_only?: boolean | null; client_id?: number; base_currency?: string }; completed_observation_sessions: number; stable_consensus_votes: number; consecutive_stable_sessions: number; divergent_resets: number; non_independent_rejections: number; target_sessions: number; process_restarts: number; target_process_restarts: number; tws_restarts: number; target_tws_restarts: number; nightly_resets: number; target_nightly_resets: number; golden_tapes: number; target_golden_tapes: number; corpus_decision: string; corpus_reasons: string[]; coverage_counts: Record<string, number>; coverage_requirements: Record<string, number>; golden_tape_decision: string; golden_tape_transform_coverage: Record<string, number>; last_reset_reason?: string | null };
   paper_canary_safety_case: { available: boolean; status: string; created_at: string | null; safety_case_id?: string; verified?: boolean; reasons?: string[] };
   reality_gap: { samples: number; no_trade_outcomes: number };

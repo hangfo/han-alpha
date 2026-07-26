@@ -1,6 +1,6 @@
 # Known limitations
 
-Updated: 2026-07-26 after Issue #3 secure onboarding closure.
+Updated: 2026-07-26 after Issue #4 external acceptance hardening.
 
 1. Synthetic data is only for engineering validation. Synthetic returns are not investment evidence.
 2. M1 proves PIT contracts only on repository-owned synthetic fixtures. It does not validate any real vendor's timestamps, symbology, revisions, corporate actions, licensing, retention or outage behavior.
@@ -26,3 +26,8 @@ Updated: 2026-07-26 after Issue #3 secure onboarding closure.
 22. macOS Keychain and guided runners reduce local secret/configuration risk but
     cannot install or accept third-party licenses, complete GUI login/2FA,
     provision accounts, obtain paid entitlements or issue independent receipts.
+23. The local installer can validate and install a user-downloaded official TWS
+    API ZIP only after explicit license attestation. It cannot prove download
+    provenance, accept terms, install TWS, authenticate an account or approve 2FA.
+24. External Acceptance counts are operational evidence summaries, not strategy
+    profitability, safety certification or authorization to trade.

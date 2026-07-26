@@ -16,6 +16,7 @@ test("renders a source-backed safety overview", async () => {
     authority_timeline: [], discrepancies: [], heartbeats: [],
     backup: { status: "NO_RECORDED_BACKUP", age_seconds: null },
     evidence_registry: { total: 1, verified: 0, type_counts: { IBKR_PREFLIGHT: 1 }, status_counts: { REJECTED: 1 }, recent: [{ artifact_id: "a".repeat(64), artifact_type: "IBKR_PREFLIGHT", schema_version: "v1", created_at: new Date().toISOString(), status: "REJECTED", verified: false, reasons: ["ARTIFACT_POLICY_NOT_PASSED"] }] },
+    external_acceptance: { e1: { api: { completed: 0, required: 24, decision: "BLOCKED" }, all: { completed: 0, required: 10, decision: "BLOCKED" } }, r1: { sec_edgar: { sample_manifests: 0, decision: "BLOCKED_HUMAN_ACTION" }, fred_alfred: { sample_manifests: 0, decision: "BLOCKED_HUMAN_ACTION" }, massive: { sample_manifests: 0, decision: "BLOCKED_HUMAN_ACTION" } } },
     burn_in: { scope_hash: null, completed_observation_sessions: 0, stable_consensus_votes: 0, consecutive_stable_sessions: 0, divergent_resets: 0, non_independent_rejections: 0, target_sessions: 30, process_restarts: 0, target_process_restarts: 3, tws_restarts: 0, target_tws_restarts: 2, nightly_resets: 0, target_nightly_resets: 1, golden_tapes: 0, target_golden_tapes: 14, corpus_decision: "NOT_AVAILABLE", corpus_reasons: [], coverage_counts: {}, coverage_requirements: {}, golden_tape_decision: "NOT_AVAILABLE", golden_tape_transform_coverage: {} },
     paper_canary_safety_case: { available: false, status: "NOT_ISSUED", created_at: null, verified: false, reasons: ["NOT_ISSUED"] },
     reality_gap: { samples: 0, no_trade_outcomes: 3 },
@@ -25,6 +26,8 @@ test("renders a source-backed safety overview", async () => {
   expect(await screen.findByText("FROZEN")).toBeInTheDocument();
   expect(screen.getByText("Paper Canary 未就绪")).toBeInTheDocument();
   expect(screen.getByText("APPROVAL_PENDING")).toBeInTheDocument();
+  expect(screen.getByText("E1 API Scope")).toBeInTheDocument();
+  expect(screen.getByText("0 / 24 · BLOCKED")).toBeInTheDocument();
 });
 
 test("fails visibly instead of presenting stale state", async () => {

@@ -6,7 +6,9 @@ import platform
 import socket
 import subprocess
 import sys
+import tempfile
 import time
+import zipfile
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import IntEnum, StrEnum
@@ -161,6 +163,59 @@ def wait_for_ibkr_socket(
         if remaining <= 0:
             return False
         time.sleep(min(interval_seconds, remaining))
+
+
+def install_official_ibapi_archive(
+    archive: Path,
+    *,
+    license_accepted: bool,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> str:
+    """Install the official local TWS API archive into the active environment."""
+
+    if not license_accepted:
+        raise ValueError("IBKR_API_LICENSE_ACCEPTANCE_REQUIRED")
+    resolved = archive.expanduser().resolve()
+    if (
+        not resolved.is_file()
+        or not resolved.name.lower().startswith("twsapi")
+        or resolved.suffix.lower() != ".zip"
+    ):
+        raise ValueError("EXPECTED_OFFICIAL_TWSAPI_ZIP")
+    with tempfile.TemporaryDirectory(prefix="hanalpha-ibapi-") as directory:
+        target = Path(directory).resolve()
+        with zipfile.ZipFile(resolved) as bundle:
+            for member in bundle.infolist():
+                destination = (target / member.filename).resolve()
+                if target not in destination.parents and destination != target:
+                    raise ValueError("UNSAFE_ARCHIVE_MEMBER")
+                if (member.external_attr >> 16) & 0o170000 == 0o120000:
+                    raise ValueError("UNSAFE_ARCHIVE_SYMLINK")
+            bundle.extractall(target)
+        candidates = sorted(target.glob("**/source/pythonclient"))
+        package = next(
+            (
+                candidate
+                for candidate in candidates
+                if (candidate / "setup.py").is_file()
+                or (candidate / "pyproject.toml").is_file()
+            ),
+            None,
+        )
+        if package is None:
+            raise ValueError("OFFICIAL_PYTHONCLIENT_NOT_FOUND")
+        result = runner(
+            [sys.executable, "-m", "pip", "install", "--no-deps", str(package)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("OFFICIAL_IBAPI_INSTALL_FAILED")
+    version = _ibapi_version()
+    if version is None:
+        raise RuntimeError("OFFICIAL_IBAPI_NOT_IMPORTABLE_AFTER_INSTALL")
+    return version
 
 
 def github_safe_summary(report: dict[str, Any]) -> str:

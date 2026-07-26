@@ -10,6 +10,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from hanalpha.domain.enums import OperatingMode
 
+_SECRET_OVERRIDES: dict[str, Any] = {}
+_SECRET_OVERRIDE_FIELDS = frozenset(
+    {
+        "ibkr_account",
+        "massive_api_key",
+        "polygon_api_key",
+        "fred_api_key",
+        "sec_user_agent",
+        "hanalpha_artifact_registry_path",
+        "hanalpha_safety_case_public_keys",
+    }
+)
+
 
 class FrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -149,7 +162,7 @@ class SecretSettings(BaseSettings):
 
 
 def load_config(path: str | Path | None = None) -> tuple[AppConfig, SecretSettings]:
-    secrets = SecretSettings()
+    secrets = SecretSettings(**_SECRET_OVERRIDES)
     selected_path = path or os.getenv("HANALPHA_CONFIG_PATH") or secrets.hanalpha_config_path
     config_path = Path(selected_path)
     if not config_path.exists():
@@ -157,3 +170,20 @@ def load_config(path: str | Path | None = None) -> tuple[AppConfig, SecretSettin
     raw: dict[str, Any] = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     config = AppConfig.model_validate(raw)
     return config, secrets
+
+
+def install_secret_overrides(values: dict[str, object]) -> None:
+    """Install a process-local, whitelisted secret payload received over IPC."""
+
+    if not values.keys() <= _SECRET_OVERRIDE_FIELDS:
+        raise ValueError("secret IPC payload contains unsupported fields")
+    if any(not isinstance(value, str) or not value for value in values.values()):
+        raise ValueError("secret IPC payload values must be non-empty strings")
+    _SECRET_OVERRIDES.clear()
+    _SECRET_OVERRIDES.update(values)
+
+
+def clear_secret_overrides() -> None:
+    """Clear process-local overrides; primarily used by isolated tests."""
+
+    _SECRET_OVERRIDES.clear()

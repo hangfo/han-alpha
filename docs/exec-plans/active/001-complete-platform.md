@@ -75,6 +75,12 @@ Record important decisions here with date, alternatives, and consequences. Do no
   complete package/API/frontend/security suite. The local machine still lacks
   TWS/Gateway, official `ibapi`, Paper login/account and data-source identities,
   so no Broker/vendor request was made and E1-B/R1-B remain external.
+- 2026-07-26: Issue #4 review hardening moved child Secrets from environment to
+  bounded stdin IPC, introduced composite Broker/account/environment identity,
+  added a license-attested safe official ibapi installer, fail-closed R1 rights
+  templates and a Registry-backed external acceptance panel. Independent signing
+  and Evidence Passport are deliberately deferred until real E1/R1 evidence
+  exists; human license acceptance, Paper login/2FA and data rights remain gates.
 
 ## Verification log
 
@@ -111,3 +117,5 @@ tracked in `012-e1-broker-truth-readiness.md` and
 `../../v2-plan/19_E1B_R1B_WEB_REVIEW_AND_REALITY_GAPS_ZH.md`.
 Issue #3 decisions and the post-qualification sequence are recorded in
 `../../v2-plan/20_E1B_R1B_ISSUE3_REVIEW_AND_ONBOARDING_ZH.md`.
+Issue #4 decisions and the beginner-safe real setup sequence are recorded in
+`../../v2-plan/21_E1B_R1B_ISSUE4_REVIEW_AND_OPERATOR_GUIDE_ZH.md`.

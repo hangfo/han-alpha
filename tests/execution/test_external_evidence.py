@@ -121,6 +121,8 @@ def test_preflight_is_redacted_and_fail_closed(tmp_path) -> None:
     serialized = json.dumps(artifact)
     assert ACCOUNT not in serialized
     assert artifact["account_hash"] == account_hash(ACCOUNT)
+    assert artifact["account_identity"]["account_hash"] == account_hash(ACCOUNT)
+    assert artifact["account_identity_hash"] == artifact["account_identity"]["identity_hash"]
     assert not artifact["ready"]
     assert artifact["write_capability"] is False
     assert artifact["checks"]["observer_client_write_methods_blocked"]
@@ -209,6 +211,8 @@ def test_burn_in_session_exports_only_bound_tape_and_hashes(tmp_path) -> None:
     assert manifest["accepted_facts"] == manifest["written_facts"] == 13
     assert manifest["dropped_facts"] == 0
     assert manifest["scope_hash"] == certificate.visibility.scope_hash
+    assert manifest["account_identity"]["account_hash"] == certificate.account_hash
+    assert manifest["account_identity_hash"] == manifest["account_identity"]["identity_hash"]
     assert manifest["safety_case_eligible"] is True
     assert len(manifest["files"]["tape.sqlite3"]) == 64
     assert verify_burn_in_manifest(session_dir).verified
@@ -226,6 +230,19 @@ def test_burn_in_session_exports_only_bound_tape_and_hashes(tmp_path) -> None:
     )
     assert matrix.decision == "BLOCKED"
     assert "COVERAGE_MISSING:manual_order" in matrix.reasons
+    identity_tamper = dict(manifest)
+    identity_tamper["account_identity"] = {
+        **identity_tamper["account_identity"],
+        "environment_hash": "f" * 64,
+    }
+    identity_tamper["manifest_id"] = canonical_hash(
+        {key: value for key, value in identity_tamper.items() if key != "manifest_id"}
+    )
+    (session_dir / "manifest.json").write_text(json.dumps(identity_tamper))
+    assert "ACCOUNT_IDENTITY_MISMATCH" in verify_burn_in_manifest(session_dir).reasons
+    (session_dir / "manifest.json").write_text(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n"
+    )
     tampered_manifest = dict(manifest)
     tampered_manifest["client_id"] = 20
     (session_dir / "manifest.json").write_text(json.dumps(tampered_manifest))
@@ -432,6 +449,55 @@ def test_artifact_registry_is_immutable_and_resolves_fail_closed(tmp_path) -> No
     Path(tampered.path).unlink()
     missing = registry.resolve(artifact_id, expected_type=ArtifactType.LICENSE_RECEIPT)
     assert "ARTIFACT_FILE_MISSING" in missing.reasons
+    registry.close()
+
+
+def test_external_acceptance_summary_counts_only_verified_bounded_evidence(tmp_path) -> None:
+    registry = ArtifactRegistry(tmp_path / "registry.sqlite3")
+    session_body = {
+        "schema_version": "ibkr-burn-in-session-v2",
+        "safety_case_eligible": True,
+        "completed_orders_api_only": True,
+        "capture_scenario": "empty_account",
+    }
+    session = {"manifest_id": canonical_hash(session_body), **session_body}
+    session_path = tmp_path / "session.json"
+    write_immutable_json(session_path, session)
+    registry.register(
+        session_path,
+        artifact_type=ArtifactType.BURN_IN_SESSION,
+        status="VERIFIED",
+        at=NOW,
+    )
+
+    raw_body = {
+        "schema_version": "pit-raw-sample-manifest-v1",
+        "artifact_type": "RAW_SAMPLE_MANIFEST",
+        "decision": "PASS",
+        "source_id": "sec_edgar",
+        "bounded": True,
+        "all_http_success": True,
+        "secrets_redacted": True,
+        "responses": [{"transport_sha256": "a" * 64}],
+    }
+    raw = {"artifact_id": canonical_hash(raw_body), **raw_body}
+    raw_path = tmp_path / "raw.json"
+    write_immutable_json(raw_path, raw)
+    registry.register(
+        raw_path,
+        artifact_type=ArtifactType.RAW_SAMPLE_MANIFEST,
+        status="VERIFIED",
+        at=NOW,
+    )
+    summary = registry.external_acceptance_summary()
+    assert summary["e1"]["api"]["completed"] == 1
+    assert summary["e1"]["api"]["required"] == 24
+    assert summary["e1"]["all"]["completed"] == 0
+    assert summary["r1"]["sec_edgar"] == {
+        "sample_manifests": 1,
+        "decision": "TRANSPORT_VERIFIED_RIGHTS_PENDING",
+    }
+    assert summary["r1"]["massive"]["decision"] == "BLOCKED_HUMAN_ACTION"
     registry.close()
 
 

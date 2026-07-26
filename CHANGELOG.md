@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-07-26 — Issue #4 external acceptance hardening
+
+- Replaced child-process Secret environment injection with bounded, whitelisted
+  stdin IPC and explicit inherited-Secret scrubbing.
+- Bound IBKR Preflight, Session and Corpus evidence to a composite Broker,
+  environment, instance and redacted-account identity.
+- Added a license-attested, traversal-safe local installer for the user-downloaded
+  official TWS API ZIP; it never downloads or accepts the license.
+- Added fail-closed Massive/SEC/FRED rights templates and a Registry-backed
+  API/ALL/R1 external acceptance panel.
+- Added adversarial Secret, archive traversal, identity tamper and unverified
+  evidence-count tests. Real Broker/vendor access remains externally blocked.
+
 ## 2026-07-26 — Secure external onboarding and exact evidence transport
 
 - Added macOS Keychain-backed local secrets, safe `.env` migration, guided IBKR

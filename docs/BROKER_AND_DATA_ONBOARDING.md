@@ -39,22 +39,25 @@ committed files.
 
 ## Install the official IBKR stack on macOS
 
-Use the current matching Stable/Offline TWS or IB Gateway and TWS API from IBKR.
-IBKR documents Python 3.11+ as supported and recommends matching TWS/API versions:
+This Apple Silicon Mac should use TWS Latest plus the current Mac/Unix API Latest.
+As of 2026-07-26, API Stable 10.45 does not include Python for Mac/Unix, while
+Latest 10.48 does. Use the official pages and re-check the displayed versions:
 
+- <https://www.interactivebrokers.com/en/trading/download-tws.php?p=latest>
+- <https://interactivebrokers.github.io/>
 - <https://ibkrcampus.com/campus/ibkr-api-page/twsapi-doc/>
 - <https://ibkrcampus.com/campus/trading-lessons/accessing-the-tws-python-api-source-code/>
 - <https://ibkrcampus.com/campus/trading-lessons/installing-configuring-tws-for-the-api/>
 
 The download requires accepting IBKR's API license and therefore remains a user
-action. After downloading the Mac/Unix archive:
+action. After personally accepting it and downloading the official Mac/Unix ZIP:
 
 ```bash
-cd ~/Downloads
-unzip twsapi_macunix.*.zip
-source /Users/rich/han-alpha/.venv/bin/activate
-cd <unzipped-directory>/IBJts/source/pythonclient
-python setup.py install
+cd /Users/rich/han-alpha
+source .venv/bin/activate
+hanalpha local-onboard install-ibapi \
+  --archive ~/Downloads/twsapi_macunix.1048.01.zip \
+  --license-accepted
 python -m pip show ibapi
 python -c 'from ibapi.client import EClient; print("ibapi import OK")'
 ```
@@ -78,16 +81,16 @@ setting is enabled. Therefore ALL-Scope manual-order visibility uses a distinct
 operator attestation after disabling the TWS setting; Han Alpha still instantiates
 an observer-only client whose order-mutating methods raise `PermissionError`.
 
-Configure `.env` locally without committing it:
+Store the Paper account in Keychain:
 
-```dotenv
-HANALPHA_ENV=paper
-HANALPHA_CONFIG_PATH=configs/paper.yaml
-IBKR_HOST=127.0.0.1
-IBKR_PORT=7497
-IBKR_CLIENT_ID=41
-IBKR_ACCOUNT=<paper-account>
+```bash
+hanalpha local-onboard set-secret --name ibkr-account
 ```
+
+Paper environment, host, TWS port `7497` and client ID `41` remain non-secret
+local configuration. The complete novice-safe installation, 2FA, socket and
+attestation sequence is in
+`docs/v2-plan/21_E1B_R1B_ISSUE4_REVIEW_AND_OPERATOR_GUIDE_ZH.md`.
 
 Then:
 

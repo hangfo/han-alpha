@@ -96,6 +96,12 @@ Issue #3 的本地安全接入已实现：Keychain SecretProvider、`local-onboa
 分层和结构化退出码均有对抗性测试。许可证接受、安装、Paper登录/2FA、账户/
 密钥录入、书面数据权利和独立签名仍是人工或外部阻塞，不能据此勾选E1-B/R1-B。
 
+Issue #4 本地加固已把子进程Secret迁移到有界stdin IPC，Broker证据绑定组合
+账户/环境/实例身份，增加本人License证明后的官方ZIP安全安装器、R1权利模板和
+Registry-backed外部验收面板。真实License接受、Paper登录/2FA、API/ALL
+Callback Corpus、Vendor Rights/Samples和独立签名仍未发生，因此E1-B/R1-B
+继续不勾选。
+
 ## 8. 工程质量
 
 - [x] Ruff通过。

@@ -1,0 +1,22 @@
+{
+  "schema_version": "pit-license-receipt-v1",
+  "artifact_type": "LICENSE_RECEIPT",
+  "decision": "BLOCKED",
+  "source_id": "massive",
+  "provider": "Massive",
+  "product": "REPLACE_WITH_EXACT_PLAN",
+  "intended_use": "price_backtest",
+  "qualifies_checks": [
+    "systematic_backtest_license",
+    "local_cache_permitted",
+    "revision_retention"
+  ],
+  "effective_from": "REPLACE_WITH_TIMEZONE_AWARE_TIMESTAMP",
+  "expires_at": "REPLACE_WITH_TIMEZONE_AWARE_TIMESTAMP",
+  "source_url": "REPLACE_WITH_PROVIDER_TERMS_OR_WRITTEN_CONFIRMATION",
+  "evidence_artifact_ids": [],
+  "limitations": [
+    "A template is not permission.",
+    "Replace every placeholder and attach the immutable written terms before changing decision."
+  ]
+}

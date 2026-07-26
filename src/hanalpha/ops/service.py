@@ -217,6 +217,23 @@ class OpsService:
             safety_case_verification=safety_verification,
         )
         evidence_registry = self.artifact_registry.ops_summary() if self.artifact_registry else None
+        external_acceptance = (
+            self.artifact_registry.external_acceptance_summary()
+            if self.artifact_registry
+            else {
+                "e1": {
+                    "api": {"completed": 0, "required": 24, "decision": "BLOCKED"},
+                    "all": {"completed": 0, "required": 10, "decision": "BLOCKED"},
+                },
+                "r1": {
+                    source: {
+                        "sample_manifests": 0,
+                        "decision": "BLOCKED_HUMAN_ACTION",
+                    }
+                    for source in ("sec_edgar", "fred_alfred", "massive")
+                },
+            }
+        )
         burn_in_corpus = (
             self.artifact_registry.latest_verified_document(ArtifactType.BURN_IN_CORPUS)
             if self.artifact_registry
@@ -301,6 +318,7 @@ class OpsService:
                 "status_counts": {},
                 "recent": [],
             },
+            "external_acceptance": external_acceptance,
             "burn_in": {
                 "scope_hash": selected_scope,
                 "scope_policy": observer.get("scope_policy"),

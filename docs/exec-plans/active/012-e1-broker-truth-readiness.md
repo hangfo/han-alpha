@@ -43,6 +43,13 @@ capability.
   resumes API and ALL matrices independently, captures at most one Session per
   explicit invocation, recomputes its Corpus, and emits GitHub-safe status plus
   stable human/external/code exit classes.
+- Local child commands receive whitelisted Secrets over bounded stdin IPC, not
+  argv or environment; official TWS API installation requires an explicit
+  human-license attestation and validates the local ZIP before pip.
+- Preflight, Session and Corpus bind a composite Broker identity across broker,
+  paper/live environment, host/port instance and redacted account hash.
+- The read-only Ops view exposes verified API/ALL acceptance counts without
+  turning planned sessions into evidence.
 
 ## External sequence
 

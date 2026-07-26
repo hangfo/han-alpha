@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import sqlite3
 import threading
 import time
@@ -19,6 +20,51 @@ from hanalpha.simulation.events import canonical_hash
 
 def account_hash(account: str) -> str:
     return canonical_hash({"ibkr_account": account})
+
+
+class BrokerAccountIdentity(BaseModel):
+    """Composite Broker/environment/account identity without exposing the account."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    broker: str
+    environment_hash: str
+    broker_instance_id: str
+    account_hash: str
+    identity_hash: str
+
+
+def broker_account_identity(
+    *,
+    account_hash_value: str,
+    environment: str,
+    host: str,
+    port: int,
+) -> BrokerAccountIdentity:
+    normalized_environment = environment.strip().lower()
+    normalized_host = host.strip().lower()
+    if normalized_environment not in {"paper", "live"}:
+        raise ValueError("broker environment must be paper or live")
+    if not re.fullmatch(r"[0-9a-f]{64}", account_hash_value):
+        raise ValueError("account hash must be a canonical SHA-256 hex digest")
+    if not normalized_host or not 1 <= port <= 65_535:
+        raise ValueError("broker host and port must identify a concrete instance")
+    body = {
+        "broker": "IBKR",
+        "environment_hash": canonical_hash(
+            {"broker": "IBKR", "environment": normalized_environment}
+        ),
+        "broker_instance_id": canonical_hash(
+            {
+                "broker": "IBKR",
+                "environment": normalized_environment,
+                "host": normalized_host,
+                "port": port,
+            }
+        ),
+        "account_hash": account_hash_value,
+    }
+    return BrokerAccountIdentity(identity_hash=canonical_hash(body), **body)
 
 
 class IBKRFactType(StrEnum):

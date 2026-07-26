@@ -1,5 +1,49 @@
 # Verification report
 
+## Issue #4 external acceptance hardening - 2026-07-26
+
+Baseline: `1465a100056420ea4a10a7eee8888b110259ffe6`.
+
+Detailed decisions and operator procedure:
+`docs/v2-plan/21_E1B_R1B_ISSUE4_REVIEW_AND_OPERATOR_GUIDE_ZH.md`.
+
+VERIFIED:
+
+- Child commands receive whitelisted Secrets through bounded stdin IPC; inherited
+  Broker/vendor Secret environment fields are removed and no value enters argv.
+- IBKR evidence binds canonical composite Broker, paper/live, host/port instance
+  and redacted account identity; recomputed/tampered identities fail verification.
+- The official API installer requires explicit human license attestation, accepts
+  only local `twsapi*.zip`, rejects path traversal/symlinks and uses the active
+  environment's pip without dependencies.
+- Massive license/entitlement and SEC/FRED policy templates are fail-closed.
+- External Acceptance UI counts only Registry-resolved VERIFIED E1 Sessions and
+  R1 raw sample manifests; transport never implies data rights.
+- `./scripts/preflight.sh`: PASS in Python 3.12.13 after activating `.venv`.
+- `./scripts/verify_all.sh`: PASS; 258 Python tests, 85.11% branch-aware
+  coverage, Ruff, strict mypy over 115 source files, package/CLI/API/synthetic/
+  backtest smoke checks, 2 Vitest tests, frontend lint/typecheck/build and zero
+  npm audit vulnerabilities.
+- No replay/backtest/strategy execution path changed. Frontend production bundle
+  remained 197.09 kB raw / 62.09 kB gzip for the main JS artifact in this run.
+
+BLOCKED:
+
+- No installed TWS/Gateway, user-accepted official TWS API, importable `ibapi`,
+  authenticated Paper session, listening Paper socket or Keychain Paper account
+  exists on this machine.
+- No SEC identity, FRED/Massive credential, written vendor right or independent
+  Reviewer receipt exists. No Broker/vendor request was made.
+- GitHub #1, #2 and #4 must remain open until their external evidence gates pass.
+
+NOT IMPLEMENTED:
+
+- Automatic license acceptance, account credential handling, GUI login/2FA or
+  Paper event creation; these are intentionally human-owned.
+- Runtime self-signing of independent Safety Cases and a pre-evidence Evidence
+  Passport; both would weaken or misstate authority.
+- E2/E3 Paper Canary, production data adapters, proven Alpha or any Live order.
+
 ## Issue #3 secure onboarding closure - 2026-07-26
 
 Baseline: `10f5fd3b029634d35d9a2b02ea75d2e53e834dda`.

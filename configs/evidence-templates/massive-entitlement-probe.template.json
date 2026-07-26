@@ -1,0 +1,21 @@
+{
+  "schema_version": "pit-entitlement-probe-v1",
+  "artifact_type": "ENTITLEMENT_PROBE",
+  "decision": "BLOCKED",
+  "source_id": "massive",
+  "product": "REPLACE_WITH_EXACT_PLAN",
+  "qualifies_checks": [],
+  "effective_from": "REPLACE_WITH_TIMEZONE_AWARE_TIMESTAMP",
+  "expires_at": "REPLACE_WITH_TIMEZONE_AWARE_TIMESTAMP",
+  "entitlements": {
+    "historical_depth": "UNVERIFIED",
+    "delisted_history": "UNVERIFIED",
+    "trades_quotes": "UNVERIFIED",
+    "corporate_actions": "UNVERIFIED"
+  },
+  "probe_artifact_ids": [],
+  "limitations": [
+    "Credential presence is not entitlement.",
+    "Populate only from a bounded real probe and the purchased plan."
+  ]
+}

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from hanalpha.config import AppConfig, SecretSettings
-from hanalpha.execution.ibkr_observer import account_hash
+from hanalpha.execution.ibkr_observer import account_hash, broker_account_identity
 from hanalpha.ops.artifacts import write_immutable_json
 from hanalpha.simulation.events import canonical_hash
 
@@ -65,6 +65,17 @@ def build_ibkr_preflight(
         "observer_client_write_methods_blocked": True,
         "operator_observation_mode_attested": mutually_exclusive_operator_mode,
     }
+    hashed_account = account_hash(secrets.ibkr_account) if secrets.ibkr_account else None
+    identity = (
+        broker_account_identity(
+            account_hash_value=hashed_account,
+            environment=secrets.hanalpha_env,
+            host=secrets.ibkr_host,
+            port=secrets.ibkr_port,
+        )
+        if hashed_account
+        else None
+    )
     body: dict[str, Any] = {
         "schema_version": "ibkr-zero-write-preflight-v1",
         "created_at": at.astimezone(UTC).isoformat(),
@@ -74,7 +85,9 @@ def build_ibkr_preflight(
         "host": secrets.ibkr_host,
         "paper_port": secrets.ibkr_port,
         "client_id": secrets.ibkr_client_id,
-        "account_hash": account_hash(secrets.ibkr_account) if secrets.ibkr_account else None,
+        "account_hash": hashed_account,
+        "account_identity": identity.model_dump() if identity else None,
+        "account_identity_hash": identity.identity_hash if identity else None,
         "base_currency": config.base_currency,
         "checks": checks,
         "ready": all(checks.values()),

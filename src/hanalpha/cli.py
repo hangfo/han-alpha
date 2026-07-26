@@ -18,7 +18,7 @@ from rich.console import Console
 from rich.table import Table
 
 from hanalpha.backtest import BacktestEngine
-from hanalpha.config import SecretSettings, load_config
+from hanalpha.config import SecretSettings, install_secret_overrides, load_config
 from hanalpha.data.fixtures import run_fixture_pipeline
 from hanalpha.data.synthetic import SyntheticMarketDataProvider
 from hanalpha.execution.burn_in import (
@@ -53,6 +53,7 @@ from hanalpha.ops.onboarding import (
     OperatorStatus,
     github_safe_summary,
     inspect_ibkr_onboarding,
+    install_official_ibapi_archive,
     launch_ibkr_application,
     status_exit,
     wait_for_ibkr_socket,
@@ -102,6 +103,26 @@ app.add_typer(local_onboard_app, name="local-onboard")
 app.add_typer(e1_app, name="e1")
 app.add_typer(r1_app, name="r1")
 console = Console()
+SECRET_STDIN_MARKER = "HANALPHA_SECRET_STDIN_V1"
+SECRET_STDIN_LIMIT = 65_536
+
+
+@app.callback()
+def load_secret_ipc() -> None:
+    """Load an internal one-shot secret payload from stdin, never argv or env."""
+
+    if os.getenv(SECRET_STDIN_MARKER) != "1":
+        return
+    payload = sys.stdin.read(SECRET_STDIN_LIMIT + 1)
+    if len(payload) > SECRET_STDIN_LIMIT:
+        raise typer.Exit(code=1)
+    try:
+        document = json.loads(payload)
+        if not isinstance(document, dict):
+            raise ValueError
+        install_secret_overrides(document)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        raise typer.Exit(code=1) from None
 
 
 def _local_settings() -> tuple[SecretSettings, MacOSKeychainSecretProvider]:
@@ -109,23 +130,40 @@ def _local_settings() -> tuple[SecretSettings, MacOSKeychainSecretProvider]:
     return settings_from_provider(provider), provider
 
 
-def _short_lived_child_environment(secrets: SecretSettings) -> dict[str, str]:
+def _secret_child_environment() -> dict[str, str]:
     environment = dict(os.environ)
-    mappings = {
-        "IBKR_ACCOUNT": secrets.ibkr_account,
-        "MASSIVE_API_KEY": secrets.massive_api_key,
-        "FRED_API_KEY": secrets.fred_api_key,
-        "SEC_USER_AGENT": secrets.sec_user_agent,
-        "HANALPHA_ARTIFACT_REGISTRY_PATH": secrets.hanalpha_artifact_registry_path,
-    }
-    environment.update({key: value for key, value in mappings.items() if value})
+    for name in (
+        "IBKR_ACCOUNT",
+        "MASSIVE_API_KEY",
+        "POLYGON_API_KEY",
+        "FRED_API_KEY",
+        "SEC_USER_AGENT",
+        "HANALPHA_ARTIFACT_REGISTRY_PATH",
+        "HANALPHA_SAFETY_CASE_PUBLIC_KEYS",
+    ):
+        environment.pop(name, None)
+    environment[SECRET_STDIN_MARKER] = "1"
     return environment
+
+
+def _secret_child_payload(secrets: SecretSettings) -> str:
+    values = {
+        "ibkr_account": secrets.ibkr_account,
+        "massive_api_key": secrets.massive_api_key,
+        "polygon_api_key": secrets.polygon_api_key,
+        "fred_api_key": secrets.fred_api_key,
+        "sec_user_agent": secrets.sec_user_agent,
+        "hanalpha_artifact_registry_path": secrets.hanalpha_artifact_registry_path,
+        "hanalpha_safety_case_public_keys": secrets.hanalpha_safety_case_public_keys,
+    }
+    return json.dumps({key: value for key, value in values.items() if value})
 
 
 def _run_secret_child(arguments: list[str], secrets: SecretSettings) -> int:
     result = subprocess.run(
         [sys.executable, "-m", "hanalpha", *arguments],
-        env=_short_lived_child_environment(secrets),
+        env=_secret_child_environment(),
+        input=_secret_child_payload(secrets),
         check=False,
         capture_output=True,
         text=True,
@@ -357,6 +395,8 @@ def ibkr_observe(
                         and authority["certificate_id"] == snapshot.completeness_certificate_id
                     ),
                     capture_scenario=capture_scenario,
+                    environment=secrets.hanalpha_env,
+                    broker_host=secrets.ibkr_host,
                 )
                 manifest = json.loads((session_dir / "manifest.json").read_text(encoding="utf-8"))
                 registry.register(
@@ -806,6 +846,44 @@ def local_onboard_ibkr(
     report_status = OperatorStatus(str(report["status"]))
     if report_status is not OperatorStatus.PASS:
         raise typer.Exit(code=status_exit(report_status))
+
+
+@local_onboard_app.command("install-ibapi")
+def local_onboard_install_ibapi(
+    archive: Annotated[Path, typer.Option("--archive", exists=True, dir_okay=False)],
+    license_accepted: Annotated[
+        bool, typer.Option("--license-accepted/--license-not-accepted")
+    ] = False,
+) -> None:
+    """Install a user-downloaded official TWS API ZIP without accepting its license."""
+
+    try:
+        version = install_official_ibapi_archive(
+            archive,
+            license_accepted=license_accepted,
+        )
+    except (ValueError, RuntimeError, OSError) as exc:
+        console.print(
+            json.dumps(
+                {
+                    "status": OperatorStatus.BLOCKED_HUMAN_ACTION,
+                    "blocker": type(exc).__name__ + ":" + str(exc),
+                    "secrets_redacted": True,
+                },
+                sort_keys=True,
+            )
+        )
+        raise typer.Exit(code=status_exit(OperatorStatus.BLOCKED_HUMAN_ACTION)) from None
+    console.print_json(
+        json.dumps(
+            {
+                "status": OperatorStatus.PASS,
+                "ibapi_version": version,
+                "secrets_redacted": True,
+            },
+            sort_keys=True,
+        )
+    )
 
 
 @local_onboard_app.command("migrate-env")

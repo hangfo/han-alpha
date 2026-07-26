@@ -46,6 +46,11 @@ evidence by itself.
 - `hanalpha r1 run` provides fixed bounded SEC/FRED/Massive sample slates,
   explicit no-network dry-run behavior and redacted structured status. Payload
   access can create only an unsigned reviewer bundle, never a qualified source.
+- Fail-closed templates capture Massive written license rights, Massive
+  entitlement probes and SEC/FRED access policies with exact `qualifies_checks`;
+  placeholders remain BLOCKED until real external evidence and independent
+  signatures exist.
+- The Ops acceptance panel reports only Registry-verified per-source samples.
 
 ## Next external work
 

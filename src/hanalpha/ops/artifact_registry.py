@@ -298,6 +298,64 @@ class ArtifactRegistry:
             "recent": recent,
         }
 
+    def external_acceptance_summary(self) -> dict[str, Any]:
+        """Project E1/R1 progress only from currently resolvable Registry evidence."""
+
+        from hanalpha.execution.burn_in import ALL_SCOPE_COVERAGE, API_SCOPE_COVERAGE
+
+        scope_requirements = {
+            "api": API_SCOPE_COVERAGE,
+            "all": ALL_SCOPE_COVERAGE,
+        }
+        scope_counts: dict[str, dict[str, int]] = {"api": {}, "all": {}}
+        source_samples = {"sec_edgar": 0, "fred_alfred": 0, "massive": 0}
+        rows = self.connection.execute(
+            """SELECT artifact_id, artifact_type FROM evidence_artifacts
+               WHERE status='VERIFIED' AND artifact_type IN (?, ?)""",
+            (ArtifactType.BURN_IN_SESSION.value, ArtifactType.RAW_SAMPLE_MANIFEST.value),
+        ).fetchall()
+        for row in rows:
+            artifact_type = ArtifactType(str(row["artifact_type"]))
+            resolution = self.resolve(str(row["artifact_id"]), expected_type=artifact_type)
+            if not resolution.verified or resolution.path is None:
+                continue
+            document = _read_json(Path(resolution.path))
+            if artifact_type is ArtifactType.BURN_IN_SESSION:
+                scope = "api" if document.get("completed_orders_api_only") is True else "all"
+                scenario = str(document.get("capture_scenario", ""))
+                if scenario in scope_requirements[scope]:
+                    scope_counts[scope][scenario] = scope_counts[scope].get(scenario, 0) + 1
+            else:
+                source = str(document.get("source_id", ""))
+                if source in source_samples:
+                    source_samples[source] += 1
+        e1 = {}
+        for scope, requirements in scope_requirements.items():
+            completed = sum(
+                min(scope_counts[scope].get(scenario, 0), required)
+                for scenario, required in requirements.items()
+            )
+            required_total = sum(requirements.values())
+            e1[scope] = {
+                "completed": completed,
+                "required": required_total,
+                "decision": "PASS" if completed == required_total else "BLOCKED",
+                "counts": scope_counts[scope],
+                "requirements": requirements,
+            }
+        r1 = {
+            source: {
+                "sample_manifests": count,
+                "decision": (
+                    "TRANSPORT_VERIFIED_RIGHTS_PENDING"
+                    if count
+                    else "BLOCKED_HUMAN_ACTION"
+                ),
+            }
+            for source, count in source_samples.items()
+        }
+        return {"e1": e1, "r1": r1}
+
 
 def _read_json(path: Path) -> dict[str, Any]:
     document = json.loads(path.read_text(encoding="utf-8"))

@@ -1,0 +1,22 @@
+{
+  "schema_version": "pit-license-receipt-v1",
+  "artifact_type": "LICENSE_RECEIPT",
+  "decision": "BLOCKED",
+  "source_id": "sec_edgar",
+  "provider": "U.S. Securities and Exchange Commission",
+  "product": "EDGAR public APIs",
+  "intended_use": "event_backtest",
+  "qualifies_checks": [
+    "systematic_backtest_license",
+    "local_cache_permitted",
+    "revision_retention"
+  ],
+  "effective_from": "REPLACE_WITH_TIMEZONE_AWARE_TIMESTAMP",
+  "expires_at": "REPLACE_WITH_REVIEW_EXPIRY",
+  "source_url": "https://www.sec.gov/search-filings/edgar-application-programming-interfaces",
+  "policy_snapshot_artifact_ids": [],
+  "limitations": [
+    "A descriptive local User-Agent and SEC fair-access compliance remain required.",
+    "Public access does not prove every derived PIT timestamp or mapping claim."
+  ]
+}

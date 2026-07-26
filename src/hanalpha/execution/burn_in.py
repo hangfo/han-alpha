@@ -12,6 +12,7 @@ from hanalpha.execution.control_models import BrokerSnapshot
 from hanalpha.execution.ibkr_observer import (
     IBKRFactStore,
     SnapshotCompletenessCertificate,
+    broker_account_identity,
 )
 from hanalpha.ops.artifacts import sha256_file, write_immutable_json
 from hanalpha.simulation.events import canonical_hash
@@ -71,6 +72,8 @@ def persist_burn_in_session(
     equivalence_receipt: dict[str, Any] | None = None,
     authority_promoted: bool = False,
     capture_scenario: str = "repeated_connection",
+    environment: str = "paper",
+    broker_host: str = "127.0.0.1",
 ) -> Path:
     """Export one Observer session and its self-verifying immutable manifest."""
 
@@ -99,6 +102,8 @@ def persist_burn_in_session(
             equivalence_receipt=equivalence_receipt,
             authority_promoted=authority_promoted,
             capture_scenario=capture_scenario,
+            environment=environment,
+            broker_host=broker_host,
             tape_hash=str(verification.manifest["files"]["tape.sqlite3"]),
             certificate_hash=str(verification.manifest["files"]["certificate.json"]),
         )
@@ -127,6 +132,8 @@ def persist_burn_in_session(
         equivalence_receipt=equivalence_receipt,
         authority_promoted=authority_promoted,
         capture_scenario=capture_scenario,
+        environment=environment,
+        broker_host=broker_host,
         tape_hash=sha256_file(tape_path),
         certificate_hash=sha256_file(certificate_path),
     )
@@ -168,6 +175,23 @@ def verify_burn_in_manifest(session_dir: Path) -> BurnInManifestVerification:
         reasons.append("MANIFEST_ID_MISMATCH")
     if manifest.get("schema_version") != "ibkr-burn-in-session-v2":
         reasons.append("SCHEMA_VERSION_UNSUPPORTED")
+    identity_document = manifest.get("account_identity")
+    if not isinstance(identity_document, dict):
+        reasons.append("ACCOUNT_IDENTITY_MISSING")
+    else:
+        try:
+            expected_identity = broker_account_identity(
+                account_hash_value=str(manifest.get("account_hash", "")),
+                environment=str(manifest.get("environment", "")),
+                host=str(manifest.get("broker_host", "")),
+                port=int(manifest.get("paper_port", 0)),
+            )
+            if identity_document != expected_identity.model_dump():
+                reasons.append("ACCOUNT_IDENTITY_MISMATCH")
+            if manifest.get("account_identity_hash") != expected_identity.identity_hash:
+                reasons.append("ACCOUNT_IDENTITY_HASH_MISMATCH")
+        except (TypeError, ValueError):
+            reasons.append("ACCOUNT_IDENTITY_INVALID")
     files = manifest.get("files")
     if not isinstance(files, dict) or set(files) != {
         "tape.sqlite3",
@@ -268,6 +292,7 @@ def evaluate_burn_in_corpus(
         "git_commit",
         "config_hash",
         "normalization_policy_hash",
+        "account_identity_hash",
     )
     bindings = {
         field: sorted({str(item.get(field)) for item in manifests}) for field in binding_fields
@@ -356,6 +381,8 @@ def _build_manifest(
     equivalence_receipt: dict[str, Any] | None,
     authority_promoted: bool,
     capture_scenario: str,
+    environment: str,
+    broker_host: str,
     tape_hash: str,
     certificate_hash: str,
 ) -> dict[str, Any]:
@@ -378,6 +405,12 @@ def _build_manifest(
     equivalence_receipt_hash = (
         canonical_hash(equivalence_receipt) if equivalence_receipt is not None else None
     )
+    identity = broker_account_identity(
+        account_hash_value=certificate.account_hash,
+        environment=environment,
+        host=broker_host,
+        port=paper_port,
+    )
     body: dict[str, Any] = {
         "schema_version": "ibkr-burn-in-session-v2",
         "observation_id": snapshot.observation_id,
@@ -386,6 +419,10 @@ def _build_manifest(
         "config_hash": config_hash,
         "normalization_policy_hash": certificate.normalization_policy_hash,
         "account_hash": certificate.account_hash,
+        "account_identity": identity.model_dump(),
+        "account_identity_hash": identity.identity_hash,
+        "environment": environment.strip().lower(),
+        "broker_host": broker_host.strip().lower(),
         "client_id": client_id,
         "paper_port": paper_port,
         "tws_server_version": tws_server_version,

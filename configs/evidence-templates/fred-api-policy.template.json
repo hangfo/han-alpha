@@ -1,0 +1,22 @@
+{
+  "schema_version": "pit-license-receipt-v1",
+  "artifact_type": "LICENSE_RECEIPT",
+  "decision": "BLOCKED",
+  "source_id": "fred_alfred",
+  "provider": "Federal Reserve Bank of St. Louis",
+  "product": "FRED and ALFRED APIs",
+  "intended_use": "macro_backtest",
+  "qualifies_checks": [
+    "systematic_backtest_license",
+    "local_cache_permitted",
+    "revision_retention"
+  ],
+  "effective_from": "REPLACE_WITH_TIMEZONE_AWARE_TIMESTAMP",
+  "expires_at": "REPLACE_WITH_REVIEW_EXPIRY",
+  "source_url": "https://fred.stlouisfed.org/docs/api/terms_of_use.html",
+  "policy_snapshot_artifact_ids": [],
+  "limitations": [
+    "Current FRED values cannot replace ALFRED vintages in historical decisions.",
+    "Release-time semantics require a separate timestamp audit."
+  ]
+}

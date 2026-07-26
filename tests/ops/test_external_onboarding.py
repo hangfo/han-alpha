@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +13,12 @@ import hanalpha.cli as cli_module
 import hanalpha.ops.external_runners as external_runners_module
 import hanalpha.ops.onboarding as onboarding_module
 from hanalpha.cli import app
-from hanalpha.config import SecretSettings, load_config
+from hanalpha.config import (
+    SecretSettings,
+    clear_secret_overrides,
+    install_secret_overrides,
+    load_config,
+)
 from hanalpha.ops.artifact_registry import ArtifactRegistry, ArtifactType
 from hanalpha.ops.artifacts import write_immutable_json
 from hanalpha.ops.external_runners import E1Scope, e1_progress, run_r1_source
@@ -20,6 +26,7 @@ from hanalpha.ops.onboarding import (
     OperatorStatus,
     github_safe_summary,
     inspect_ibkr_onboarding,
+    install_official_ibapi_archive,
     launch_ibkr_application,
     status_exit,
     wait_for_ibkr_socket,
@@ -62,6 +69,75 @@ def test_keychain_backend_never_places_secret_in_argv() -> None:
     provider.set(LocalSecret.FRED_CREDENTIAL, "top-secret")
     assert all("top-secret" not in argument for arguments, _ in calls for argument in arguments)
     assert calls[-1][1] == "top-secret\n"
+
+
+def test_secret_child_uses_stdin_ipc_and_scrubs_inherited_environment(monkeypatch) -> None:
+    captured = {}
+
+    def run(arguments, **kwargs):
+        captured["arguments"] = arguments
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    monkeypatch.setenv("IBKR_ACCOUNT", "inherited-account")
+    monkeypatch.setenv("FRED_API_KEY", "inherited-key")
+    monkeypatch.setattr(cli_module.subprocess, "run", run)
+    secrets = SecretSettings(
+        _env_file=None,
+        ibkr_account="paper-account",
+        fred_api_key="fred-value",
+    )
+    assert cli_module._run_secret_child(["doctor"], secrets) == 0
+    assert "paper-account" not in " ".join(captured["arguments"])
+    assert "IBKR_ACCOUNT" not in captured["env"]
+    assert "FRED_API_KEY" not in captured["env"]
+    assert captured["env"][cli_module.SECRET_STDIN_MARKER] == "1"
+    assert '"ibkr_account": "paper-account"' in captured["input"]
+    assert '"fred_api_key": "fred-value"' in captured["input"]
+
+    install_secret_overrides({"ibkr_account": "ipc-account"})
+    try:
+        _, loaded = load_config()
+        assert loaded.ibkr_account == "ipc-account"
+        with pytest.raises(ValueError, match="unsupported"):
+            install_secret_overrides({"not_allowed": "value"})
+    finally:
+        clear_secret_overrides()
+
+
+def test_official_ibapi_installer_requires_attestation_and_rejects_traversal(
+    tmp_path, monkeypatch
+) -> None:
+    valid = tmp_path / "twsapi_macunix.1048.01.zip"
+    with zipfile.ZipFile(valid, "w") as bundle:
+        bundle.writestr("IBJts/source/pythonclient/setup.py", "pass")
+    with pytest.raises(ValueError, match="LICENSE"):
+        install_official_ibapi_archive(valid, license_accepted=False)
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(onboarding_module, "_ibapi_version", lambda: "10.48.1")
+    version = install_official_ibapi_archive(
+        valid,
+        license_accepted=True,
+        runner=lambda arguments, **_kwargs: (
+            calls.append(arguments)
+            or subprocess.CompletedProcess(arguments, 0, "", "")
+        ),
+    )
+    assert version == "10.48.1"
+    assert calls[0][:4] == [
+        onboarding_module.sys.executable,
+        "-m",
+        "pip",
+        "install",
+    ]
+    assert "--no-deps" in calls[0]
+
+    unsafe = tmp_path / "twsapi-unsafe.zip"
+    with zipfile.ZipFile(unsafe, "w") as bundle:
+        bundle.writestr("../escape", "bad")
+    with pytest.raises(ValueError, match="UNSAFE_ARCHIVE_MEMBER"):
+        install_official_ibapi_archive(unsafe, license_accepted=True)
 
 
 def test_secret_provider_failure_paths_remain_value_free(tmp_path) -> None:
