@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 from datetime import UTC, datetime
 
@@ -56,7 +57,14 @@ async def test_sec_probe_is_bounded_redacted_and_registry_resolvable(tmp_path) -
     assert "operations@hanalpha.test" not in serialized
     assert manifest["bounded"] is True
     assert manifest["secrets_redacted"] is True
+    assert manifest["artifact_type"] == ArtifactType.RAW_SAMPLE_MANIFEST
     assert manifest["responses"][0]["effective_time_semantics"].startswith("EDGAR")
+    response = manifest["responses"][0]
+    assert response["transport_sha256"] != response["normalized_sha256"]
+    assert (path.parent / response["transport_file"]).read_bytes().startswith(b"{")
+    assert json.loads((path.parent / response["headers_file"]).read_text()) == {
+        "content-type": "application/json"
+    }
     registry = ArtifactRegistry(tmp_path / "registry.sqlite3")
     try:
         artifact_id = registry.register(
@@ -245,6 +253,47 @@ async def test_massive_probe_audits_stable_ids_and_delisted_history(tmp_path) ->
 
 
 @pytest.mark.asyncio
+async def test_probe_preserves_compressed_transport_separately_from_normalized_json(
+    tmp_path,
+) -> None:
+    payload = {
+        "cik": "1",
+        "tickers": ["TEST"],
+        "filings": {"recent": {"form": [], "acceptanceDateTime": []}},
+    }
+    raw = gzip.compress(json.dumps(payload, separators=(",", ":")).encode())
+
+    class RawStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield raw
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={
+                "content-type": "application/json",
+                "content-encoding": "gzip",
+                "etag": '"fixture"',
+            },
+            stream=RawStream(),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        path, manifest = await run_bounded_source_probe(
+            ProbeSource.SEC_EDGAR,
+            ("1",),
+            output_root=tmp_path,
+            secrets=SecretSettings(sec_user_agent="Han Alpha ops@hanalpha.test"),
+            at=NOW,
+            client=client,
+        )
+    response = manifest["responses"][0]
+    assert (path.parent / response["transport_file"]).read_bytes() == raw
+    assert json.loads((path.parent / response["normalized_file"]).read_text()) == payload
+    assert json.loads((path.parent / response["headers_file"]).read_text())["etag"] == '"fixture"'
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("response", "error"),
     [
@@ -314,8 +363,9 @@ def test_probe_audit_rejects_unbound_or_invalid_evidence(tmp_path) -> None:
             "responses": [
                 {
                     "name": "bad",
-                    "file": raw.name,
-                    "sha256": sha256_file(raw),
+                    "normalized_file": raw.name,
+                    "normalized_sha256": sha256_file(raw),
+                    "observed_at": NOW.isoformat(),
                 }
             ],
         },
@@ -350,8 +400,9 @@ def test_probe_audit_rejects_unbound_or_invalid_evidence(tmp_path) -> None:
             "responses": [
                 {
                     "name": "unknown",
-                    "file": object_payload.name,
-                    "sha256": sha256_file(object_payload),
+                    "normalized_file": object_payload.name,
+                    "normalized_sha256": sha256_file(object_payload),
+                    "observed_at": NOW.isoformat(),
                 }
             ],
         },
@@ -370,8 +421,9 @@ def test_probe_audit_rejects_unbound_or_invalid_evidence(tmp_path) -> None:
             "responses": [
                 {
                     "name": "tampered",
-                    "file": object_payload.name,
-                    "sha256": "0" * 64,
+                    "normalized_file": object_payload.name,
+                    "normalized_sha256": "0" * 64,
+                    "observed_at": NOW.isoformat(),
                 }
             ],
         },
@@ -392,8 +444,9 @@ def test_probe_audit_rejects_unbound_or_invalid_evidence(tmp_path) -> None:
             "responses": [
                 {
                     "name": "escape",
-                    "file": "../object.json",
-                    "sha256": sha256_file(object_payload),
+                    "normalized_file": "../object.json",
+                    "normalized_sha256": sha256_file(object_payload),
+                    "observed_at": NOW.isoformat(),
                 }
             ],
         },
@@ -428,8 +481,9 @@ def test_sec_audit_blocks_naive_timestamps_and_missing_lineage(tmp_path) -> None
             "responses": [
                 {
                     "name": "submissions",
-                    "file": raw.name,
-                    "sha256": sha256_file(raw),
+                    "normalized_file": raw.name,
+                    "normalized_sha256": sha256_file(raw),
+                    "observed_at": NOW.isoformat(),
                 }
             ],
         },

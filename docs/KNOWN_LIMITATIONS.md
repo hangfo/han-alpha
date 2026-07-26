@@ -1,6 +1,6 @@
 # Known limitations
 
-Updated: 2026-07-26 after E1-B/R1-B executable acceptance tooling.
+Updated: 2026-07-26 after Issue #3 secure onboarding closure.
 
 1. Synthetic data is only for engineering validation. Synthetic returns are not investment evidence.
 2. M1 proves PIT contracts only on repository-owned synthetic fixtures. It does not validate any real vendor's timestamps, symbology, revisions, corporate actions, licensing, retention or outage behavior.
@@ -13,7 +13,7 @@ Updated: 2026-07-26 after E1-B/R1-B executable acceptance tooling.
 9. Generation Restore is atomic across restored files, but sequential online backups are not a distributed transaction. `content_set_hash` identifies equal database bytes; `generation_id` remains manifest/time addressed. Quiesce writers for a strict cross-store PIT backup.
 10. The M0 operator token protects default-local mutation routes but is not remote deployment authentication. Read routes remain unauthenticated; TLS, CSRF, actor identity, rotation, rate limits and network policy remain deployment work.
 11. Broker capability is an application boundary, not protection against compromise of the host or the authorized process. Python objects are opaque conventions, not an OS security boundary.
-12. Massive, SEC and FRED/ALFRED bounded probe/audit tooling exists, but production adapters are not qualified or enabled. R1-B remains BLOCKED on actual licenses, entitlements, live sampled payloads, timestamp semantics, survivorship, revisions and independent reviews.
+12. Massive, SEC and FRED/ALFRED bounded runners and exact transport-byte probe/audit tooling exist, but production adapters are not qualified or enabled. R1-B remains BLOCKED on actual licenses, entitlements, live sampled payloads, timestamp semantics, survivorship, revisions and independent reviews.
 13. End-of-replay holdings remain explicitly marked rather than being liquidated using an invented final fill. A flat-close protocol must provide another eligible bar and explicit exit orders.
 14. Sector and fundamental metadata are not supplied by a qualified PIT universe. The M1 calendar is a deterministic fixture classifier, not an authoritative holiday, early-close, halt or venue-rule source.
 15. M4 implements local LLM evidence contracts and ablation mechanics. Real Provider value on licensed PIT data remains unvalidated; LLM outputs have no sizing, risk or Broker authority.
@@ -23,3 +23,6 @@ Updated: 2026-07-26 after E1-B/R1-B executable acceptance tooling.
 19. Per-intent cancel has a durable fenced path, but real IBKR cancel callback mapping and Bracket recovery are not externally validated.
 20. Reality-gap supports partial-fill schedules, opportunity cost and protection delay, but real Replay/Shadow/Paper comparisons require a forward window.
 21. The Ops UI remains read-only. Browser mutation controls are intentionally not implemented.
+22. macOS Keychain and guided runners reduce local secret/configuration risk but
+    cannot install or accept third-party licenses, complete GUI login/2FA,
+    provision accounts, obtain paid entitlements or issue independent receipts.

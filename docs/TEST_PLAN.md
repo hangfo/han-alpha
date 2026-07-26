@@ -86,6 +86,10 @@ Before considering alpha credible:
 - Arm/Claim reject expired Quote, Provider, Authority, Approval or Reservation evidence;
 - unrelated Heartbeats and unsigned Safety Case Booleans cannot satisfy readiness;
 - current-Scope Burn-in never inherits a different Scope's stable count.
+- E1 runner resumes the exact API/ALL matrix, counts only verified in-scope
+  Sessions and captures at most one Session per invocation;
+- Keychain writes never place values in argv, all CLI failure paths redact known
+  values/URLs, and human/external/code blockers have distinct exit codes.
 
 ## R1 PIT source qualification
 
@@ -97,6 +101,13 @@ Before considering alpha credible:
 - matching only an Artifact type without the exact `qualifies_checks` claim fails;
 - bounded SEC/Massive/FRED probes redact keys, bind raw payload hashes and reject
   excessive scope or malformed provider responses;
+- compressed HTTP tests prove transport bytes remain byte-exact while normalized
+  JSON is decoded and independently hashed;
+- strict Artifact documents reject caller type disagreement, and Registry
+  authority survives moving the original through a portable content-addressed
+  copy while rejecting copied-object tampering;
+- R1 dry-runs and missing-secret paths perform no network call; explicit bounded
+  execution still remains externally blocked until rights and review exist;
 - derived Timestamp/Revision/Symbology/Survivorship audits retain unresolved
   availability semantics as BLOCKED;
 - initial vendor templates remain BLOCKED until external evidence is attached.

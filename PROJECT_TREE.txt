@@ -88,6 +88,7 @@
 ./docs/v2-plan/17_M7B1_REVIEW_AND_E1_R1_DECISIONS_ZH.md
 ./docs/v2-plan/18_E1_R1_REVIEW_AND_EVIDENCE_AUTHORITY_ZH.md
 ./docs/v2-plan/19_E1B_R1B_WEB_REVIEW_AND_REALITY_GAPS_ZH.md
+./docs/v2-plan/20_E1B_R1B_ISSUE3_REVIEW_AND_ONBOARDING_ZH.md
 ./docs/v2-plan/README.md
 ./infra/docker-compose.yml
 ./pyproject.toml
@@ -158,8 +159,13 @@
 ./src/hanalpha/metrics/portfolio.py
 ./src/hanalpha/ops/__init__.py
 ./src/hanalpha/ops/artifact_registry.py
+./src/hanalpha/ops/artifact_registry_types.py
 ./src/hanalpha/ops/artifacts.py
 ./src/hanalpha/ops/backup.py
+./src/hanalpha/ops/evidence_schemas.py
+./src/hanalpha/ops/external_runners.py
+./src/hanalpha/ops/onboarding.py
+./src/hanalpha/ops/secrets.py
 ./src/hanalpha/ops/service.py
 ./src/hanalpha/orchestrator/__init__.py
 ./src/hanalpha/orchestrator/system.py
@@ -234,6 +240,7 @@
 ./tests/integration/test_api.py
 ./tests/integration/test_manual_submission_gate.py
 ./tests/integration/test_system_cycle.py
+./tests/ops/test_external_onboarding.py
 ./tests/ops/test_ops.py
 ./tests/pit/__init__.py
 ./tests/pit/conftest.py

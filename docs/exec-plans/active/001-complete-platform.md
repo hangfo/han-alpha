@@ -67,6 +67,14 @@ Record important decisions here with date, alternatives, and consequences. Do no
   bounded live-source probes and source-backed Evidence/Corpus views are locally
   implemented. External accounts, licenses, real samples and independent review
   still block E1-B/R1-B completion.
+- 2026-07-26: Issue #3 local onboarding is complete. macOS Keychain is the
+  preferred SecretProvider; E1/R1 runners are resumable and fail closed;
+  qualification documents are strict and Registry objects portable; probes bind
+  literal transport bytes, safe headers and normalized JSON separately. Full
+  local verification passed 254 Python tests at 85.21% branch coverage and the
+  complete package/API/frontend/security suite. The local machine still lacks
+  TWS/Gateway, official `ibapi`, Paper login/account and data-source identities,
+  so no Broker/vendor request was made and E1-B/R1-B remain external.
 
 ## Verification log
 
@@ -101,3 +109,5 @@ tracked in `012-e1-broker-truth-readiness.md` and
 `013-r1-pit-data-qualification.md`; review integration decisions are recorded in
 `../../v2-plan/18_E1_R1_REVIEW_AND_EVIDENCE_AUTHORITY_ZH.md` and
 `../../v2-plan/19_E1B_R1B_WEB_REVIEW_AND_REALITY_GAPS_ZH.md`.
+Issue #3 decisions and the post-qualification sequence are recorded in
+`../../v2-plan/20_E1B_R1B_ISSUE3_REVIEW_AND_ONBOARDING_ZH.md`.

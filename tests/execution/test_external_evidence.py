@@ -349,8 +349,12 @@ def test_artifact_registry_is_immutable_and_resolves_fail_closed(tmp_path) -> No
     write_immutable_json(
         artifact,
         {
-            "schema_version": "license-receipt-v1",
+            "schema_version": "pit-license-receipt-v1",
+            "artifact_type": "LICENSE_RECEIPT",
             "decision": "VERIFIED",
+            "qualifies_checks": ["systematic_backtest_license"],
+            "effective_from": NOW.isoformat(),
+            "expires_at": (NOW + timedelta(days=30)).isoformat(),
         },
     )
     with pytest.raises(ValueError, match="unsupported artifact status"):
@@ -392,8 +396,12 @@ def test_artifact_registry_is_immutable_and_resolves_fail_closed(tmp_path) -> No
         )
     assert registry.resolve(artifact_id, expected_type=ArtifactType.LICENSE_RECEIPT).verified
     assert registry.latest_verified_document(ArtifactType.LICENSE_RECEIPT) == {
+        "artifact_type": "LICENSE_RECEIPT",
         "decision": "VERIFIED",
-        "schema_version": "license-receipt-v1",
+        "effective_from": NOW.isoformat(),
+        "expires_at": (NOW + timedelta(days=30)).isoformat(),
+        "qualifies_checks": ["systematic_backtest_license"],
+        "schema_version": "pit-license-receipt-v1",
     }
     summary = registry.ops_summary()
     assert summary["total"] == summary["verified"] == 1
@@ -401,7 +409,7 @@ def test_artifact_registry_is_immutable_and_resolves_fail_closed(tmp_path) -> No
     claim_mismatch = registry.resolve(
         artifact_id,
         expected_type=ArtifactType.LICENSE_RECEIPT,
-        required_claim="systematic_backtest_license",
+        required_claim="local_cache_permitted",
     )
     assert "ARTIFACT_CLAIM_MISMATCH" in claim_mismatch.reasons
 
@@ -415,8 +423,13 @@ def test_artifact_registry_is_immutable_and_resolves_fail_closed(tmp_path) -> No
 
     artifact.write_bytes(artifact.read_bytes() + b"tamper")
     tampered = registry.resolve(artifact_id, expected_type=ArtifactType.LICENSE_RECEIPT)
+    assert tampered.verified
+    assert tampered.identity_type.value == "CONTENT_HASH"
+    assert tampered.path is not None
+    Path(tampered.path).write_bytes(Path(tampered.path).read_bytes() + b"tamper")
+    tampered = registry.resolve(artifact_id, expected_type=ArtifactType.LICENSE_RECEIPT)
     assert "ARTIFACT_HASH_MISMATCH" in tampered.reasons
-    artifact.unlink()
+    Path(tampered.path).unlink()
     missing = registry.resolve(artifact_id, expected_type=ArtifactType.LICENSE_RECEIPT)
     assert "ARTIFACT_FILE_MISSING" in missing.reasons
     registry.close()
@@ -454,8 +467,14 @@ def test_artifact_registry_requires_valid_schema_and_policy(tmp_path) -> None:
     write_immutable_json(
         captured,
         {
-            "schema_version": "raw-sample-v1",
-            "decision": "VERIFIED",
+            "schema_version": "pit-raw-sample-manifest-v1",
+            "artifact_type": "RAW_SAMPLE_MANIFEST",
+            "decision": "PASS",
+            "bounded": True,
+            "all_http_success": True,
+            "secrets_redacted": True,
+            "qualifies_checks": [],
+            "responses": [{"name": "fixture"}],
         },
     )
     captured_id = registry.register(
@@ -475,8 +494,14 @@ def test_artifact_registry_requires_valid_schema_and_policy(tmp_path) -> None:
         bad_identifier,
         {
             "artifact_id": "0" * 64,
-            "schema_version": "raw-sample-v1",
-            "decision": "VERIFIED",
+            "schema_version": "pit-raw-sample-manifest-v1",
+            "artifact_type": "RAW_SAMPLE_MANIFEST",
+            "decision": "PASS",
+            "bounded": True,
+            "all_http_success": True,
+            "secrets_redacted": True,
+            "qualifies_checks": [],
+            "responses": [{"name": "fixture"}],
         },
     )
     identifier_id = registry.register(

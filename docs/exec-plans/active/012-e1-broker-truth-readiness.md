@@ -37,11 +37,17 @@ capability.
   Truth Map plus a content-addressed corpus.
 - Ops and the read-only Dashboard use Artifact Registry and Corpus evidence rather
   than hard-coded restart/Golden Tape counters.
+- `hanalpha local-onboard ibkr` reports exact installation/account/socket gates
+  without exposing account identifiers. `hanalpha e1 run` resumes API and ALL
+  matrices independently, captures at most one Session per explicit invocation,
+  and emits GitHub-safe status plus stable human/external/code exit classes.
 
 ## External sequence
 
-1. Install matching official stable TWS/IB Gateway and TWS API.
-2. Set Paper account, port, client ID and base currency locally.
+1. Install matching official stable TWS/IB Gateway and TWS API after personally
+   accepting the licenses.
+2. Store the Paper account in macOS Keychain, then complete GUI login/2FA; keep
+   port, client ID and base currency in local non-secret configuration.
 3. Keep API Read-Only enabled for account/position captures. Disable it only for
    the distinct manual-order visibility phase, while retaining the observer-only
    client, and record the matching operator attestation.
@@ -52,6 +58,10 @@ capability.
 7. Capture restart, nightly-reset, late-commission, correction, partial-fill,
    cancel and Bracket tapes.
 8. Replay callback permutation/duplication/delay cases deterministically.
+
+The current machine stops before step 1: neither TWS/Gateway nor official
+`ibapi` is detected, no Paper port listens, and no Paper account is stored.
+This is `BLOCKED_HUMAN_ACTION`, not a code failure.
 
 ## Exit gate
 

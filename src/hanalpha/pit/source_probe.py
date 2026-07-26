@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import gzip
 import json
+import zlib
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -9,6 +11,7 @@ from typing import Any
 import httpx
 
 from hanalpha.config import SecretSettings
+from hanalpha.ops.artifact_registry import ArtifactType
 from hanalpha.ops.artifacts import sha256_file, write_immutable_bytes, write_immutable_json
 from hanalpha.simulation.events import canonical_hash
 
@@ -44,30 +47,53 @@ async def run_bounded_source_probe(
     try:
         for index, request in enumerate(requests):
             try:
-                response = await http.get(
+                built_request = http.build_request(
+                    "GET",
                     request["url"],
                     params=request["params"],
                     headers=request["headers"],
                 )
+                response = await http.send(built_request, stream=True)
                 content_type = response.headers.get("content-type", "")
                 if "json" not in content_type.lower():
-                    raise SourceProbeError(
-                        f"{source.value}:{request['name']}:NON_JSON_RESPONSE"
-                    )
-                payload = response.json()
+                    await response.aclose()
+                    raise SourceProbeError(f"{source.value}:{request['name']}:NON_JSON_RESPONSE")
+                transport_body = (
+                    response.content
+                    if response.is_stream_consumed
+                    else b"".join([chunk async for chunk in response.aiter_raw()])
+                )
+                await response.aclose()
+                normalized_body = _decode_transport_body(
+                    transport_body,
+                    response.headers.get("content-encoding", ""),
+                    source=source,
+                    request_name=request["name"],
+                )
+                payload = json.loads(normalized_body)
                 if not isinstance(payload, dict):
-                    raise SourceProbeError(
-                        f"{source.value}:{request['name']}:NON_OBJECT_RESPONSE"
-                    )
+                    raise SourceProbeError(f"{source.value}:{request['name']}:NON_OBJECT_RESPONSE")
                 response.raise_for_status()
                 _validate_payload(source, request["name"], payload)
             except (httpx.HTTPError, json.JSONDecodeError) as exc:
                 raise SourceProbeError(
                     f"{source.value}:{request['name']}:{type(exc).__name__}"
                 ) from None
-            destination = output_root / "raw" / f"{index:03d}-{request['name']}.json"
+            transport_destination = (
+                output_root / "transport" / f"{index:03d}-{request['name']}.body.bin"
+            )
+            normalized_destination = (
+                output_root / "normalized" / f"{index:03d}-{request['name']}.json"
+            )
+            headers_destination = (
+                output_root / "transport" / f"{index:03d}-{request['name']}.headers.json"
+            )
             write_immutable_bytes(
-                destination,
+                transport_destination,
+                transport_body,
+            )
+            write_immutable_bytes(
+                normalized_destination,
                 json.dumps(
                     payload,
                     sort_keys=True,
@@ -76,16 +102,38 @@ async def run_bounded_source_probe(
                 ).encode()
                 + b"\n",
             )
+            selected_headers = {
+                key: response.headers[key]
+                for key in (
+                    "date",
+                    "etag",
+                    "last-modified",
+                    "content-type",
+                    "content-encoding",
+                )
+                if key in response.headers
+            }
+            write_immutable_json(headers_destination, selected_headers)
             responses.append(
                 {
                     "name": request["name"],
-                    "source_url": request["public_url"],
-                    "file": str(destination.relative_to(output_root)),
-                    "sha256": sha256_file(destination),
-                    "bytes": destination.stat().st_size,
+                    "endpoint": request["public_url"],
+                    "endpoint_identity": canonical_hash(
+                        {"method": "GET", "endpoint": request["public_url"]}
+                    ),
+                    "transport_file": str(transport_destination.relative_to(output_root)),
+                    "transport_sha256": sha256_file(transport_destination),
+                    "transport_bytes": transport_destination.stat().st_size,
+                    "normalized_file": str(normalized_destination.relative_to(output_root)),
+                    "normalized_sha256": sha256_file(normalized_destination),
+                    "normalized_bytes": normalized_destination.stat().st_size,
+                    "headers_file": str(headers_destination.relative_to(output_root)),
+                    "headers_sha256": sha256_file(headers_destination),
                     "http_status": response.status_code,
                     "content_type": content_type.split(";", 1)[0],
+                    "content_encoding": response.headers.get("content-encoding") or "identity",
                     "observed_at": at.astimezone(UTC).isoformat(),
+                    "received_at": at.astimezone(UTC).isoformat(),
                     "effective_time_semantics": request["effective_time_semantics"],
                     "ingested_at": at.astimezone(UTC).isoformat(),
                 }
@@ -95,6 +143,7 @@ async def run_bounded_source_probe(
             await http.aclose()
     body: dict[str, Any] = {
         "schema_version": "pit-raw-sample-manifest-v1",
+        "artifact_type": ArtifactType.RAW_SAMPLE_MANIFEST.value,
         "decision": "PASS",
         "source_id": source.value,
         "identifiers": sorted(identifiers),
@@ -228,3 +277,23 @@ def _validate_payload(source: ProbeSource, name: str, payload: dict[str, Any]) -
             raise SourceProbeError(f"fred_alfred:{name}:{expected.upper()}_MISSING")
     elif payload.get("status") not in {"OK", "DELAYED"} and "results" not in payload:
         raise SourceProbeError(f"massive:{name}:SUCCESS_STATUS_MISSING")
+
+
+def _decode_transport_body(
+    body: bytes,
+    content_encoding: str,
+    *,
+    source: ProbeSource,
+    request_name: str,
+) -> bytes:
+    encoding = content_encoding.strip().lower()
+    if encoding in {"", "identity"}:
+        return body
+    try:
+        if encoding == "gzip":
+            return gzip.decompress(body)
+        if encoding == "deflate":
+            return zlib.decompress(body)
+    except (OSError, zlib.error):
+        raise SourceProbeError(f"{source.value}:{request_name}:CONTENT_DECODING_FAILED") from None
+    raise SourceProbeError(f"{source.value}:{request_name}:UNSUPPORTED_CONTENT_ENCODING")

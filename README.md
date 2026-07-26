@@ -2,8 +2,9 @@
 
 > E1-B/R1-B local tooling status (2026-07-26): observer writes are structurally
 > blocked, Artifact/Claim resolution, Golden-Tape replay, bounded real-source
-> probes and Evidence/Corpus dashboards are implemented. Official IBKR callbacks,
-> licensed PIT data, external review, Alpha and every Paper write remain blocked.
+> probes, Keychain-backed onboarding and resumable external runners are
+> implemented. Official IBKR callbacks, licensed PIT data, external review,
+> Alpha and every Paper write remain blocked.
 
 A directly runnable, evidence-grounded trading research and IBKR paper-execution system.
 
@@ -69,7 +70,16 @@ Then visit `http://127.0.0.1:8000/docs`.
 5. Keep `configs/paper.yaml` and a paper-only client ID.
 6. Install the official Python API from the TWS API distribution so `import ibapi` works.
 7. Change `mode` only after adding a real market-data provider; change `execution.broker` to `ibkr` only for paper testing.
-8. Run `hanalpha ibkr-preflight --read-only-attested` for account facts. IBKR
+8. Store the Paper account without placing it in shell history, then run the
+   guided readiness check:
+
+   ```bash
+   hanalpha local-onboard set-secret --name ibkr-account
+   hanalpha local-onboard ibkr --github-summary
+   hanalpha e1 run --scope api --dry-run --github-summary
+   ```
+
+9. Run `hanalpha ibkr-preflight --read-only-attested` for account facts. IBKR
    Read-Only hides order information, so the separate manual-order matrix uses
    `--order-visibility-attested` with Han Alpha's structurally write-blocked
    observer. Run scoped zero-write
@@ -102,6 +112,9 @@ Append-only ledger + API + monitoring
 
 ```bash
 hanalpha doctor
+hanalpha local-onboard ibkr --github-summary
+hanalpha e1 run --scope api --dry-run --github-summary
+hanalpha r1 run --source sec_edgar --dry-run --github-summary
 hanalpha demo --cycles 20
 hanalpha backtest --symbol CRDO --bars 1500
 hanalpha pit quality --state .state/pit --snapshot <snapshot_id>

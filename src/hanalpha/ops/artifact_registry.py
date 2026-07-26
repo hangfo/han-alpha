@@ -3,34 +3,17 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import UTC, datetime
-from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from hanalpha.ops.artifacts import sha256_file
+from hanalpha.ops.artifact_registry_types import ArtifactIdentityType, ArtifactType
+from hanalpha.ops.artifacts import sha256_file, write_immutable_bytes
+from hanalpha.ops.evidence_schemas import strict_document_valid
 from hanalpha.simulation.events import canonical_hash
 
-
-class ArtifactType(StrEnum):
-    IBKR_PREFLIGHT = "IBKR_PREFLIGHT"
-    BURN_IN_SESSION = "BURN_IN_SESSION"
-    BURN_IN_CORPUS = "BURN_IN_CORPUS"
-    GOLDEN_TAPE = "GOLDEN_TAPE"
-    RESET_CASE = "RESET_CASE"
-    CANCEL_CASE = "CANCEL_CASE"
-    BRACKET_CASE = "BRACKET_CASE"
-    ACCOUNT_PROOF = "ACCOUNT_PROOF"
-    MARKET_CALENDAR_POLICY = "MARKET_CALENDAR_POLICY"
-    LICENSE_RECEIPT = "LICENSE_RECEIPT"
-    ENTITLEMENT_PROBE = "ENTITLEMENT_PROBE"
-    RAW_SAMPLE_MANIFEST = "RAW_SAMPLE_MANIFEST"
-    TIMESTAMP_AUDIT = "TIMESTAMP_AUDIT"
-    REVISION_AUDIT = "REVISION_AUDIT"
-    SYMBOLOGY_AUDIT = "SYMBOLOGY_AUDIT"
-    SURVIVORSHIP_AUDIT = "SURVIVORSHIP_AUDIT"
-    REVIEW_APPROVAL = "REVIEW_APPROVAL"
+__all__ = ["ArtifactIdentityType", "ArtifactRegistry", "ArtifactResolution", "ArtifactType"]
 
 
 class ArtifactResolution(BaseModel):
@@ -39,6 +22,7 @@ class ArtifactResolution(BaseModel):
     reference: str
     expected_type: ArtifactType
     required_claim: str | None = None
+    identity_type: ArtifactIdentityType | None = None
     hash_present: bool
     artifact_found: bool
     artifact_hash_valid: bool
@@ -63,6 +47,9 @@ class ArtifactRegistry:
 
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path.resolve()
+        self.root = self.path.parent
+        self.object_root = self.root / "evidence-objects"
         self.connection = sqlite3.connect(path)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute(
@@ -79,10 +66,20 @@ class ArtifactRegistry:
               scope_hash TEXT,
               account_hash TEXT,
               status TEXT NOT NULL,
-              supersedes TEXT
+              supersedes TEXT,
+              identity_type TEXT NOT NULL DEFAULT 'CONTENT_HASH'
             )
             """
         )
+        columns = {
+            str(row["name"])
+            for row in self.connection.execute("PRAGMA table_info(evidence_artifacts)").fetchall()
+        }
+        if "identity_type" not in columns:
+            self.connection.execute(
+                "ALTER TABLE evidence_artifacts ADD COLUMN "
+                "identity_type TEXT NOT NULL DEFAULT 'CONTENT_HASH'"
+            )
         self.connection.commit()
 
     def close(self) -> None:
@@ -100,6 +97,7 @@ class ArtifactRegistry:
         account_hash: str | None = None,
         supersedes: str | None = None,
         at: datetime | None = None,
+        identity_type: ArtifactIdentityType | None = None,
     ) -> str:
         if status not in {"CAPTURED", "VERIFIED", "REJECTED", "SUPERSEDED"}:
             raise ValueError("unsupported artifact status")
@@ -107,8 +105,24 @@ class ArtifactRegistry:
         schema_version = document.get("schema_version")
         if not isinstance(schema_version, (str, int)):
             raise ValueError("artifact schema_version is required")
+        if not strict_document_valid(document, artifact_type):
+            raise ValueError(f"artifact document does not authoritatively declare {artifact_type}")
         digest = sha256_file(path)
         artifact_id = digest
+        selected_identity = identity_type or (
+            ArtifactIdentityType.MANIFEST_HASH
+            if artifact_type
+            in {
+                ArtifactType.BURN_IN_CORPUS,
+                ArtifactType.BURN_IN_SESSION,
+                ArtifactType.GOLDEN_TAPE,
+                ArtifactType.RAW_SAMPLE_MANIFEST,
+            }
+            else ArtifactIdentityType.CONTENT_HASH
+        )
+        object_path = self.object_root / digest[:2] / f"{digest}.json"
+        write_immutable_bytes(object_path, path.read_bytes())
+        stored_path = str(object_path.relative_to(self.root))
         existing = self.connection.execute(
             "SELECT * FROM evidence_artifacts WHERE artifact_id=?", (artifact_id,)
         ).fetchone()
@@ -121,7 +135,7 @@ class ArtifactRegistry:
             artifact_id,
             artifact_type.value,
             str(schema_version),
-            str(path.resolve()),
+            stored_path,
             digest,
             created_at,
             git_commit,
@@ -130,6 +144,7 @@ class ArtifactRegistry:
             account_hash,
             status,
             supersedes,
+            selected_identity.value,
         )
         if existing is not None:
             comparable = (
@@ -145,13 +160,14 @@ class ArtifactRegistry:
                 existing["account_hash"],
                 existing["status"],
                 existing["supersedes"],
+                existing["identity_type"],
             )
             if comparable != values:
                 raise RuntimeError("artifact registration is immutable")
             return artifact_id
         with self.connection:
             self.connection.execute(
-                "INSERT INTO evidence_artifacts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO evidence_artifacts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 values,
             )
         return artifact_id
@@ -181,6 +197,7 @@ class ArtifactRegistry:
                 reference=reference,
                 expected_type=expected_type,
                 required_claim=required_claim,
+                identity_type=None,
                 hash_present=hash_present,
                 artifact_found=False,
                 artifact_hash_valid=False,
@@ -188,7 +205,8 @@ class ArtifactRegistry:
                 artifact_policy_passed=False,
                 reasons=tuple(reasons),
             )
-        path = Path(str(row["path"]))
+        stored_path = Path(str(row["path"]))
+        path = stored_path if stored_path.is_absolute() else self.root / stored_path
         artifact_found = path.is_file()
         if not artifact_found:
             reasons.append("ARTIFACT_FILE_MISSING")
@@ -220,6 +238,7 @@ class ArtifactRegistry:
             reference=reference,
             expected_type=expected_type,
             required_claim=required_claim,
+            identity_type=ArtifactIdentityType(str(row["identity_type"])),
             hash_present=hash_present,
             artifact_found=artifact_found,
             artifact_hash_valid=hash_valid,
@@ -244,7 +263,7 @@ class ArtifactRegistry:
 
     def ops_summary(self, *, limit: int = 20) -> dict[str, Any]:
         rows = self.connection.execute(
-            """SELECT artifact_id, artifact_type, schema_version, created_at, status
+            """SELECT artifact_id, artifact_type, schema_version, created_at, status, identity_type
                FROM evidence_artifacts ORDER BY created_at DESC"""
         ).fetchall()
         type_counts: dict[str, int] = {}
@@ -266,6 +285,7 @@ class ArtifactRegistry:
                         "schema_version": row["schema_version"],
                         "created_at": row["created_at"],
                         "status": status,
+                        "identity_type": row["identity_type"],
                         "verified": resolution.verified,
                         "reasons": list(resolution.reasons),
                     }
@@ -296,6 +316,8 @@ def _schema_valid(document: dict[str, Any], artifact_type: ArtifactType) -> bool
     }
     prefix = expected_prefixes.get(artifact_type)
     if prefix and not schema.startswith(prefix):
+        return False
+    if not strict_document_valid(document, artifact_type):
         return False
     identifier = (
         document.get("manifest_id") or document.get("corpus_id") or document.get("artifact_id")

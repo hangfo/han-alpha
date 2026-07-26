@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -32,10 +32,14 @@ def audit_probe_manifest(
         raise ValueError(f"unsupported source probe: {source}")
     written: list[tuple[Path, ArtifactType, dict[str, Any]]] = []
     for artifact_type, payload in audits:
+        effective_from = _manifest_observed_at(manifest)
         body = {
             "schema_version": f"pit-{artifact_type.value.lower().replace('_', '-')}-v1",
+            "artifact_type": artifact_type.value,
             "source_id": source,
             "raw_sample_manifest_sha256": sha256_file(manifest_path),
+            "effective_from": effective_from.isoformat(),
+            "expires_at": (effective_from + timedelta(days=90)).isoformat(),
             **payload,
         }
         document = {"artifact_id": canonical_hash(body), **body}
@@ -49,10 +53,10 @@ def _load_bound_payloads(root: Path, manifest: dict[str, Any]) -> dict[str, dict
     payloads: dict[str, dict[str, Any]] = {}
     resolved_root = root.resolve()
     for response in manifest.get("responses", []):
-        path = (root / str(response["file"])).resolve()
+        path = (root / str(response["normalized_file"])).resolve()
         if not path.is_relative_to(resolved_root):
             raise ValueError("raw sample path escapes the evidence directory")
-        if sha256_file(path) != response["sha256"]:
+        if sha256_file(path) != response["normalized_sha256"]:
             raise ValueError(f"raw sample hash mismatch: {response['name']}")
         payload = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
@@ -242,3 +246,13 @@ def _timezone_aware(value: str) -> bool:
     except ValueError:
         return False
     return parsed.tzinfo is not None
+
+
+def _manifest_observed_at(manifest: dict[str, Any]) -> datetime:
+    values = [
+        datetime.fromisoformat(str(response["observed_at"]))
+        for response in manifest.get("responses", [])
+    ]
+    if not values or any(value.tzinfo is None for value in values):
+        raise ValueError("raw sample manifest has no timezone-aware observation time")
+    return min(values).astimezone(UTC)

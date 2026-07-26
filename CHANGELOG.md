@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-07-26 — Secure external onboarding and exact evidence transport
+
+- Added macOS Keychain-backed local secrets, safe `.env` migration, guided IBKR
+  readiness checks and structured human/external/code blocker exits.
+- Added resumable `e1 run` and bounded `r1 run` orchestration with fixed scenario
+  matrices, explicit no-network dry-runs and GitHub-safe summaries.
+- Split literal HTTP response bytes, selected headers and normalized JSON into
+  independently hashed evidence layers, including compressed-response coverage.
+- Added strict authority-document schemas, explicit Artifact identity semantics
+  and a portable content-addressed Registry object store.
+- Added adversarial secret-redaction, Keychain argv isolation, onboarding,
+  runner-resume, Artifact portability/tamper and transport-byte tests.
+- Verified 254 Python tests at 85.21% branch-aware coverage, strict mypy over
+  115 source files, package/CLI/API/research smoke checks, frontend tests/build
+  and zero npm audit vulnerabilities. No Broker or vendor request was made.
+
 ## 2026-07-26 — E1-B/R1-B executable acceptance tooling
 
 - Added an observer-only IBKR client that structurally rejects every order write,

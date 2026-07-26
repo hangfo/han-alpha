@@ -19,6 +19,24 @@ SEC_USER_AGENT configured: false
 This is a credential/environment BLOCKED state, not a code failure. No Broker or
 vendor request was made.
 
+The preferred local secret store is macOS Keychain. Secret values are read from
+stdin by the onboarding CLI, are never placed in command arguments, and are not
+printed. Environment variables and an ignored `.env` remain compatibility
+fallbacks:
+
+```bash
+hanalpha local-onboard set-secret --name ibkr-account
+hanalpha local-onboard set-secret --name sec-user-agent
+hanalpha local-onboard set-secret --name fred-api-key
+hanalpha local-onboard set-secret --name massive-api-key
+
+# Optional one-time migration after reviewing the ignored local file.
+hanalpha local-onboard migrate-env --env-file .env --scrub
+```
+
+Never paste values into chat, Issue comments, command arguments, screenshots or
+committed files.
+
 ## Install the official IBKR stack on macOS
 
 Use the current matching Stable/Offline TWS or IB Gateway and TWS API from IBKR.
@@ -74,6 +92,12 @@ IBKR_ACCOUNT=<paper-account>
 Then:
 
 ```bash
+hanalpha local-onboard ibkr --github-summary
+
+# The runner is resumable and captures at most one verified Session per
+# invocation. Dry-run performs no Broker request.
+hanalpha e1 run --scope api --dry-run --github-summary
+
 hanalpha ibkr-preflight --read-only-attested
 
 hanalpha ibkr-burn-in \
@@ -178,6 +202,14 @@ Run bounded real probes only after configuring the corresponding local identity
 or key:
 
 ```bash
+hanalpha r1 run --source sec_edgar --dry-run --github-summary
+hanalpha r1 run --source fred_alfred --dry-run --github-summary
+hanalpha r1 run --source massive --dry-run --github-summary
+
+# --execute is an explicit, bounded real network action. Start with SEC only
+# after storing a descriptive User-Agent and reviewing provider terms.
+hanalpha r1 run --source sec_edgar --execute --github-summary
+
 hanalpha pit probe-source --source sec_edgar \
   --identifier 320193 \
   --output .state/pit/probes/sec
@@ -198,9 +230,11 @@ hanalpha pit evidence-list
 ```
 
 Probe failures are redacted before reaching the CLI, including HTTP request URLs
-that may otherwise contain API keys. A successful Probe proves only bounded
-payload access. Audit Artifacts declare the exact `qualifies_checks` they can
-support; a shared Artifact type cannot satisfy unrelated checks.
+that may otherwise contain API keys. The probe preserves literal response bytes,
+selected safe headers and normalized JSON as three independently hashed layers;
+normalization never replaces transport evidence. A successful Probe proves only
+bounded payload access. Audit Artifacts declare the exact `qualifies_checks`
+they can support; a shared Artifact type cannot satisfy unrelated checks.
 
 Fail-closed source qualification:
 
@@ -226,3 +260,20 @@ HANALPHA_ARTIFACT_REGISTRY_PATH=.state/evidence-artifacts.sqlite3
 
 Private reviewer keys must remain offline and outside the repository, runtime
 environment and application database.
+
+## Runner status contract
+
+External runners use stable process classes:
+
+```text
+0  PASS
+1  FAILED_CODE
+20 BLOCKED_HUMAN_ACTION
+21 BLOCKED_EXTERNAL_RIGHTS
+```
+
+`BLOCKED_HUMAN_ACTION` means the next step is an installation, license acceptance,
+login/2FA, local secret entry or bounded scenario performed by the user.
+`BLOCKED_EXTERNAL_RIGHTS` means payload access may work but written rights and/or
+independent Review are still missing. Neither state may be relabeled as a code
+success.

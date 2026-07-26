@@ -5,6 +5,8 @@ import base64
 import importlib.metadata
 import json
 import os
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -16,7 +18,7 @@ from rich.console import Console
 from rich.table import Table
 
 from hanalpha.backtest import BacktestEngine
-from hanalpha.config import load_config
+from hanalpha.config import SecretSettings, load_config
 from hanalpha.data.fixtures import run_fixture_pipeline
 from hanalpha.data.synthetic import SyntheticMarketDataProvider
 from hanalpha.execution.burn_in import (
@@ -41,6 +43,25 @@ from hanalpha.experiments.registry import ExperimentRegistry
 from hanalpha.experiments.runner import ExperimentRunner
 from hanalpha.ops.artifact_registry import ArtifactRegistry, ArtifactType
 from hanalpha.ops.artifacts import write_immutable_json
+from hanalpha.ops.external_runners import (
+    E1Scope,
+    e1_progress,
+    run_r1_source,
+    runner_github_summary,
+)
+from hanalpha.ops.onboarding import (
+    OperatorStatus,
+    github_safe_summary,
+    inspect_ibkr_onboarding,
+    launch_ibkr_application,
+    status_exit,
+)
+from hanalpha.ops.secrets import (
+    LocalSecret,
+    MacOSKeychainSecretProvider,
+    migrate_env_secrets,
+    settings_from_provider,
+)
 from hanalpha.orchestrator import build_system
 from hanalpha.pit.catalog import PITCatalog
 from hanalpha.pit.qualification import (
@@ -72,8 +93,43 @@ from hanalpha.strategies import BreakoutStrategy
 
 app = typer.Typer(no_args_is_help=True, help="Han Alpha trading system CLI")
 pit_app = typer.Typer(no_args_is_help=True, help="Point-in-time fixture data tools")
+local_onboard_app = typer.Typer(no_args_is_help=True, help="Secure local external onboarding")
+e1_app = typer.Typer(no_args_is_help=True, help="E1-B external Broker acceptance runner")
+r1_app = typer.Typer(no_args_is_help=True, help="R1-B external source acceptance runner")
 app.add_typer(pit_app, name="pit")
+app.add_typer(local_onboard_app, name="local-onboard")
+app.add_typer(e1_app, name="e1")
+app.add_typer(r1_app, name="r1")
 console = Console()
+
+
+def _local_settings() -> tuple[SecretSettings, MacOSKeychainSecretProvider]:
+    provider = MacOSKeychainSecretProvider()
+    return settings_from_provider(provider), provider
+
+
+def _short_lived_child_environment(secrets: SecretSettings) -> dict[str, str]:
+    environment = dict(os.environ)
+    mappings = {
+        "IBKR_ACCOUNT": secrets.ibkr_account,
+        "MASSIVE_API_KEY": secrets.massive_api_key,
+        "FRED_API_KEY": secrets.fred_api_key,
+        "SEC_USER_AGENT": secrets.sec_user_agent,
+        "HANALPHA_ARTIFACT_REGISTRY_PATH": secrets.hanalpha_artifact_registry_path,
+    }
+    environment.update({key: value for key, value in mappings.items() if value})
+    return environment
+
+
+def _run_secret_child(arguments: list[str], secrets: SecretSettings) -> int:
+    result = subprocess.run(
+        [sys.executable, "-m", "hanalpha", *arguments],
+        env=_short_lived_child_environment(secrets),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode
 
 
 @app.command("execution-reconcile")
@@ -661,6 +717,254 @@ def pit_evidence_list(
             sort_keys=True,
         )
     )
+
+
+@local_onboard_app.command("ibkr")
+def local_onboard_ibkr(
+    output: Annotated[Path, typer.Option("--output")] = Path(".state/onboarding"),
+    launch: Annotated[bool, typer.Option("--launch/--no-launch")] = False,
+    github_summary_output: Annotated[
+        bool, typer.Option("--github-summary/--no-github-summary")
+    ] = False,
+) -> None:
+    """Inspect local IBKR prerequisites without reading or printing credentials."""
+
+    config, _ = load_config()
+    secrets, provider = _local_settings()
+    if launch:
+        try:
+            launch_ibkr_application()
+        except RuntimeError as exc:
+            report = {
+                "schema_version": "hanalpha-local-onboarding-v1",
+                "report_id": "launch-blocked",
+                "status": OperatorStatus.BLOCKED_HUMAN_ACTION,
+                "checks": {},
+                "blockers": [str(exc)],
+                "secrets_redacted": True,
+            }
+            console.print(github_safe_summary(report))
+            raise typer.Exit(code=status_exit(OperatorStatus.BLOCKED_HUMAN_ACTION)) from None
+    report = inspect_ibkr_onboarding(
+        config,
+        secrets,
+        repository_root=Path.cwd(),
+        provider=provider,
+        at=datetime.now(UTC),
+    )
+    destination = output / f"{report['report_id']}.json"
+    write_immutable_json(destination, report)
+    if github_summary_output:
+        console.print(github_safe_summary(report))
+    else:
+        console.print_json(json.dumps(report, sort_keys=True))
+        console.print(f"artifact={destination}")
+    report_status = OperatorStatus(str(report["status"]))
+    if report_status is not OperatorStatus.PASS:
+        raise typer.Exit(code=status_exit(report_status))
+
+
+@local_onboard_app.command("migrate-env")
+def local_onboard_migrate_env(
+    env_file: Annotated[Path, typer.Option("--env-file", exists=True, dir_okay=False)] = Path(
+        ".env"
+    ),
+    scrub: Annotated[bool, typer.Option("--scrub/--keep-env")] = False,
+) -> None:
+    """Import supported ignored .env values into Keychain without printing them."""
+
+    provider = MacOSKeychainSecretProvider()
+    migrated = migrate_env_secrets(env_file, provider, scrub=scrub)
+    console.print(
+        json.dumps(
+            {
+                "status": OperatorStatus.PASS,
+                "migrated_secret_count": len(migrated),
+                "env_scrubbed": scrub,
+                "secrets_redacted": True,
+            },
+            sort_keys=True,
+        )
+    )
+
+
+@local_onboard_app.command("set-secret")
+def local_onboard_set_secret(
+    name: Annotated[LocalSecret, typer.Option("--name")],
+) -> None:
+    """Store one local value in macOS Keychain without exposing it in argv or output."""
+
+    value = typer.prompt(f"Enter local value for {name.value}", hide_input=True)
+    MacOSKeychainSecretProvider().set(name, value)
+    console.print(
+        json.dumps(
+            {
+                "status": OperatorStatus.PASS,
+                "stored": name.value,
+                "secrets_redacted": True,
+            },
+            sort_keys=True,
+        )
+    )
+
+
+@e1_app.command("run")
+def e1_run(
+    scope: Annotated[E1Scope, typer.Option("--scope")],
+    output: Annotated[Path, typer.Option("--output")] = Path(".state/e1"),
+    execute: Annotated[bool, typer.Option("--execute/--dry-run")] = False,
+    read_only_attested: Annotated[
+        bool, typer.Option("--read-only-attested/--read-only-not-attested")
+    ] = False,
+    order_visibility_attested: Annotated[
+        bool,
+        typer.Option("--order-visibility-attested/--order-visibility-not-attested"),
+    ] = False,
+    github_summary_output: Annotated[
+        bool, typer.Option("--github-summary/--no-github-summary")
+    ] = False,
+) -> None:
+    """Resume one E1-B scope and capture at most one verified session per invocation."""
+
+    config, _ = load_config()
+    secrets, provider = _local_settings()
+    onboarding = inspect_ibkr_onboarding(
+        config,
+        secrets,
+        repository_root=Path.cwd(),
+        provider=provider,
+        at=datetime.now(UTC),
+    )
+    if onboarding["status"] is not OperatorStatus.PASS:
+        console.print(
+            github_safe_summary(onboarding)
+            if github_summary_output
+            else json.dumps(onboarding, sort_keys=True)
+        )
+        raise typer.Exit(code=status_exit(onboarding["status"]))
+    scope_root = output / scope.value
+    progress = e1_progress(scope_root, scope)
+    if execute and progress["next_scenario"]:
+        mode_flags = (
+            ["--read-only-attested"]
+            if read_only_attested
+            else (
+                ["--order-visibility-attested"]
+                if order_visibility_attested
+                else ["--read-only-not-attested", "--order-visibility-not-attested"]
+            )
+        )
+        preflight_code = _run_secret_child(
+            [
+                "ibkr-preflight",
+                *mode_flags,
+                "--output",
+                str(scope_root / "preflight"),
+                "--registry",
+                secrets.hanalpha_artifact_registry_path,
+            ],
+            secrets,
+        )
+        if preflight_code != 0:
+            progress = {
+                **progress,
+                "status": OperatorStatus.BLOCKED_HUMAN_ACTION,
+                "next_human_action": "ATTEST_CORRECT_TWS_OBSERVATION_MODE",
+            }
+        else:
+            capture_code = _run_secret_child(
+                [
+                    "ibkr-burn-in",
+                    "--state",
+                    secrets.hanalpha_ibkr_observer_path,
+                    "--control",
+                    ".state/execution-control.sqlite3",
+                    "--sessions",
+                    "1",
+                    "--completed-orders-scope",
+                    scope.value,
+                    "--capture-scenario",
+                    str(progress["next_scenario"]),
+                    "--output",
+                    str(scope_root),
+                    "--registry",
+                    secrets.hanalpha_artifact_registry_path,
+                ],
+                secrets,
+            )
+            if capture_code != 0:
+                progress = {
+                    **progress,
+                    "status": OperatorStatus.FAILED_CODE,
+                    "next_human_action": "INSPECT_REDACTED_LOCAL_CAPTURE_LOGS",
+                }
+            else:
+                progress = e1_progress(scope_root, scope)
+    progress_body = {key: value for key, value in progress.items() if key != "report_id"}
+    progress = {"report_id": canonical_hash(progress_body), **progress_body}
+    destination = scope_root / f"{progress['report_id']}.runner.json"
+    write_immutable_json(destination, progress)
+    console.print(
+        runner_github_summary(progress)
+        if github_summary_output
+        else json.dumps(progress, sort_keys=True)
+    )
+    if progress["status"] is not OperatorStatus.PASS:
+        raise typer.Exit(code=status_exit(progress["status"]))
+
+
+@r1_app.command("run")
+def r1_run(
+    source: Annotated[ProbeSource, typer.Option("--source")],
+    output: Annotated[Path, typer.Option("--output")] = Path(".state/r1"),
+    registry_path: Annotated[Path, typer.Option("--registry")] = Path(
+        ".state/evidence-artifacts.sqlite3"
+    ),
+    execute: Annotated[bool, typer.Option("--execute/--dry-run")] = False,
+    github_summary_output: Annotated[
+        bool, typer.Option("--github-summary/--no-github-summary")
+    ] = False,
+) -> None:
+    """Run one bounded R1-B source bundle; rights and review remain human gates."""
+
+    secrets, _ = _local_settings()
+
+    async def _run() -> dict[str, object]:
+        registry = ArtifactRegistry(registry_path)
+        try:
+            return await run_r1_source(
+                source,
+                output_root=output,
+                registry=registry,
+                secrets=secrets,
+                at=datetime.now(UTC),
+                execute=execute,
+            )
+        finally:
+            registry.close()
+
+    try:
+        report = asyncio.run(_run())
+    except (ValueError, SourceProbeError) as exc:
+        report_body: dict[str, object] = {
+            "schema_version": "r1-external-runner-progress-v1",
+            "source_id": source.value,
+            "status": OperatorStatus.FAILED_CODE,
+            "reason": type(exc).__name__,
+            "artifact_ids": [],
+            "secrets_redacted": True,
+        }
+        report = {"report_id": canonical_hash(report_body), **report_body}
+    destination = output / source.value / f"{report['report_id']}.runner.json"
+    write_immutable_json(destination, report)
+    console.print(
+        runner_github_summary(report)
+        if github_summary_output
+        else json.dumps(report, sort_keys=True)
+    )
+    report_status = OperatorStatus(str(report["status"]))
+    if report_status is not OperatorStatus.PASS:
+        raise typer.Exit(code=status_exit(report_status))
 
 
 @pit_app.command("quality")

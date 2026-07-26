@@ -1,5 +1,55 @@
 # Verification report
 
+## Issue #3 secure onboarding closure - 2026-07-26
+
+Baseline: `10f5fd3b029634d35d9a2b02ea75d2e53e834dda`.
+
+Detailed review decisions:
+`docs/v2-plan/20_E1B_R1B_ISSUE3_REVIEW_AND_ONBOARDING_ZH.md`.
+
+VERIFIED:
+
+- macOS Keychain is the preferred SecretProvider; secret writes use stdin,
+  values never enter argv/output, `.env` migration is explicit and scrub is
+  optional.
+- `local-onboard ibkr` produces redacted, structured readiness and may launch an
+  already installed application, but never accepts a license, logs in or handles
+  2FA for the user.
+- `e1 run` resumes independent API/ALL matrices, counts only verified eligible
+  in-scope Sessions and captures at most one Session per explicit invocation.
+- `r1 run` uses fixed bounded source slates, makes no network request in dry-run
+  or missing-secret states, and cannot convert successful access into data rights.
+- Probe evidence independently binds literal HTTP bytes, safe headers and
+  normalized JSON. Strict authority documents declare their own type/schema/
+  effective window, and Registry authority is stored in portable
+  content-addressed objects.
+- Runner failure reports are self-hashed after final status mutation. CLI error
+  paths disclose exception class only and redact known values, query keys,
+  authorization headers, account fields and tracebacks.
+- `./scripts/preflight.sh`: PASS in Python 3.12.13.
+- `./scripts/verify_all.sh`: PASS; 254 Python tests, 85.21% branch-aware
+  coverage, Ruff, strict mypy over 115 source files, sdist/wheel,
+  CLI/API/synthetic/backtest smoke checks, 2 Vitest tests, frontend
+  lint/typecheck and Vite production build.
+- `npm audit`: zero vulnerabilities.
+
+BLOCKED:
+
+- Local IBKR onboarding: no installed TWS/Gateway, accepted official TWS API,
+  importable `ibapi`, listening Paper socket or Keychain Paper account.
+- R1 execution: no local SEC identity, FRED key or Massive key; written rights
+  and independent Reviewer Receipts remain external even after transport access.
+- GitHub #1 and #2 therefore remain external acceptance work. Issue #3 local
+  implementation is complete but its human/external checklist cannot be closed.
+
+NOT IMPLEMENTED:
+
+- Automatic license acceptance, account creation, GUI login/2FA or credential
+  acquisition; these are intentionally user-controlled.
+- Evidence Firewall/Research Sandbox/Alpha Confidence runtime. These are R2
+  research-governance candidates after E1/R1 qualification, not E1/R1 defects.
+- E2/E3 Paper Canary, production vendor adapters or any live order path.
+
 ## E1-B/R1-B executable acceptance tooling - 2026-07-26
 
 Baseline: `0b9b9879071b928e6524917263e90904aaaf962f`.

@@ -72,7 +72,16 @@
   capture and manual-order visibility capture are distinct operator-attested
   modes because TWS Read-Only hides order information.
 - Golden Tape metamorphic replay emits a Callback Truth Map. Bounded real-source
-  probes preserve secret-redacted raw payloads before typed PIT audits.
+  probes preserve literal transport bytes, selected safe headers and separately
+  normalized JSON before typed PIT audits.
+- The Artifact Registry copies authority evidence into a portable,
+  content-addressed object store. Strict qualification documents declare their
+  own Artifact type, schema, effective window and exact claims; a caller cannot
+  relabel the document while registering it.
+- macOS Keychain is the preferred local SecretProvider. External acceptance
+  runners pass secrets only to a short-lived child environment, emit redacted
+  reports with stable exit classes, and never convert successful transport into
+  Broker Truth or data rights.
 
 ### Control plane
 

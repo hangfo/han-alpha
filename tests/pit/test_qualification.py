@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from hanalpha.config import SecretSettings
 from hanalpha.ops.artifact_registry import ArtifactRegistry, ArtifactType
 from hanalpha.ops.artifacts import write_immutable_json
+from hanalpha.ops.evidence_schemas import SCHEMA_PREFIXES
 from hanalpha.pit.qualification import (
     CHECK_ARTIFACT_TYPES,
     DataSourceProfile,
@@ -137,11 +138,14 @@ def test_registered_unexpired_evidence_can_reach_promotion_qualified(tmp_path) -
         serialization.Encoding.Raw, serialization.PublicFormat.Raw
     )
     artifact_types = sorted(set(CHECK_ARTIFACT_TYPES.values()), key=lambda item: item.value)
-    for index, artifact_type in enumerate(artifact_types):
+    for artifact_type in artifact_types:
         document = {
-            "schema_version": f"qualification-evidence-{index}-v1",
+            "schema_version": f"{SCHEMA_PREFIXES[artifact_type]}v1",
+            "artifact_type": artifact_type.value,
             "decision": "VERIFIED",
             "artifact_kind": artifact_type.value,
+            "effective_from": NOW.isoformat(),
+            "expires_at": (NOW + timedelta(days=30)).isoformat(),
             "qualifies_checks": sorted(
                 code
                 for code, mapped_type in CHECK_ARTIFACT_TYPES.items()
@@ -152,6 +156,7 @@ def test_registered_unexpired_evidence_can_reach_promotion_qualified(tmp_path) -
             document.update(
                 {
                     "schema_version": "pit-raw-sample-manifest-v1",
+                    "artifact_type": ArtifactType.RAW_SAMPLE_MANIFEST.value,
                     "decision": "PASS",
                     "bounded": True,
                     "all_http_success": True,
@@ -166,6 +171,7 @@ def test_registered_unexpired_evidence_can_reach_promotion_qualified(tmp_path) -
         )
         receipt = {
             "schema_version": "qualification-review-receipt-v1",
+            "artifact_type": ArtifactType.REVIEW_APPROVAL.value,
             "reviewer_id": "independent-data-reviewer",
             "public_key_id": "data-review-key",
             "decision": "APPROVE",

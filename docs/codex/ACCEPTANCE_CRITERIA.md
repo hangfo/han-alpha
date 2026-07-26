@@ -91,6 +91,11 @@ Observer写方法被结构性封锁。Golden Tape变形回放、Callback Truth M
 源Probe、Claim-scoped Artifact及Evidence/Corpus只读视图已实现。没有真实账户、
 许可、样本和Reviewer Receipt时仍不得勾选外部验收。
 
+Issue #3 的本地安全接入已实现：Keychain SecretProvider、`local-onboard`、
+可恢复 `e1/r1 run`、严格Artifact文档、可搬迁内容寻址对象、真实HTTP传输字节
+分层和结构化退出码均有对抗性测试。许可证接受、安装、Paper登录/2FA、账户/
+密钥录入、书面数据权利和独立签名仍是人工或外部阻塞，不能据此勾选E1-B/R1-B。
+
 ## 8. 工程质量
 
 - [x] Ruff通过。

@@ -39,6 +39,13 @@ evidence by itself.
   into PASS.
 - Every Artifact must declare the exact `qualifies_checks` it supports; matching
   only the broad Artifact type is insufficient.
+- Probe evidence separates byte-exact HTTP transport, selected safe headers and
+  normalized JSON, each with independent hashes. Registry authority uses
+  portable content-addressed objects and strict type/schema/effective-window
+  validation.
+- `hanalpha r1 run` provides fixed bounded SEC/FRED/Massive sample slates,
+  explicit no-network dry-run behavior and redacted structured status. Payload
+  access can create only an unsigned reviewer bundle, never a qualified source.
 
 ## Next external work
 
@@ -50,6 +57,10 @@ evidence by itself.
 5. Prove `available_at` for every strategy-visible field.
 6. Only after a QUALIFIED report, implement the production adapter and publish a
    content-addressed PIT snapshot.
+
+The current machine has no SEC identity, FRED key or Massive key stored. No
+vendor request was made; real source execution remains `BLOCKED_HUMAN_ACTION`,
+then `BLOCKED_EXTERNAL_RIGHTS` until written rights and independent receipts exist.
 
 ## First research slate after qualification
 
