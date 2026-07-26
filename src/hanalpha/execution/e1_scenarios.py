@@ -454,6 +454,9 @@ def _evaluate_scenario(
         return "ORDER_LIFECYCLE_OBSERVED"
     if scenario is E1ScenarioType.PROCESS_RESTART:
         _require_two_sessions(manifests, reasons)
+        session_boots = {
+            str(item.get("process_boot_id")) for item in manifests if item.get("process_boot_id")
+        }
         boots = {
             str(item.details.get("boot_id"))
             for item in receipts
@@ -461,6 +464,8 @@ def _evaluate_scenario(
         }
         if len(boots) < 2:
             reasons.append("DISTINCT_PROCESS_BOOT_RECEIPTS_MISSING")
+        if len(session_boots) != 2 or boots != session_boots:
+            reasons.append("PROCESS_BOOT_RECEIPTS_NOT_BOUND_TO_SESSIONS")
         _require_equal_hash(manifests, "semantic_hash", reasons, "POST_RESTART_STATE_DIVERGED")
         return "PROCESS_BOOT_CHANGED_STATE_STABLE"
     if scenario is E1ScenarioType.TWS_RESTART:

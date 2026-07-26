@@ -511,6 +511,7 @@ def test_e1_event_receipt_cli_binds_verified_session_and_registers(tmp_path, mon
         "account_identity_hash": "a" * 64,
         "git_commit": "b" * 40,
         "config_hash": "c" * 64,
+        "process_boot_id": "boot-1",
     }
     verification = SimpleNamespace(
         verified=True,

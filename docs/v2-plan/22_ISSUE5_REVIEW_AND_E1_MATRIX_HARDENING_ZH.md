@@ -18,7 +18,7 @@ Issue #5 完整覆盖这五项以及受限 Paper fixture、回调语义和执行
 | 将 `47a253b` 视为从代码接入跨到真实 Broker 验证 | 接受，但收窄 | 真实 7497、官方 API、账户/持仓/订单/执行回调和五个空账户 Session 已证实；不能外推到下单、恢复或收益。 |
 | 本地工程 97/100、真实 Broker 35%、Alpha 10% | 作为方向性评分保留 | 评分不是验收证据。仓库只使用可重验 Artifact、测试与外部回调判定完成度。 |
 | 保持 Broker Truth、PIT、可重复性优先 | 接受 | 不为补矩阵弱化 Scope、风险、幂等或对账；Broker 仍是订单、成交、持仓和资金权威。 |
-| restart/recovery/client-switch 不能靠标签计数 | 接受并实现 | 新增哈希绑定的 `E1EventReceipt` 与 `E1ScenarioCase`。标签只安排采集，Case 必须绑定真实子 Session、事件凭证、预期/观测转换和有效期。 |
+| restart/recovery/client-switch 不能靠标签计数 | 接受并实现 | 新增哈希绑定的 `E1EventReceipt` 与 `E1ScenarioCase`。标签只安排采集，Case 必须绑定真实子 Session、事件凭证、预期/观测转换和有效期；Process receipt 还必须精确匹配采集进程启动时生成并写入 Session 的 UUID。 |
 | 24/30 Session 与单一连续共识矛盾 | 接受并实现 | 单一 `E1AcceptancePolicy` 同时供 Runner/Evaluator 使用；API 为 22 个同 Scope 子 Session + 2 个跨 Scope Client-switch 子 Session，总计 24；ALL 为 9+1，总计 10。不同经济状态分别判断，不再要求跨状态形成同一语义共识。 |
 | client-ID switch 不能混入稳定 Scope | 接受并实现 | Client-switch Session 只作为跨 Scope 子证据；普通 Scope 绑定与阈值排除这些 Session，Case 仍要求两个 client ID、两个 Scope Hash 和兼容 Broker 经济状态。 |
 | Observer denylist 应改为正向能力边界 | 接受并实现 | Observer 仅暴露九个实际使用的只读请求；所有其余 `req*`、`place*`、`cancel*`、`exercise*`、`replace*`、`bind*` 和日志级别 Broker 操作均失败关闭。测试枚举当前官方 `EClient` 表面，未来新增操作默认不可达。 |

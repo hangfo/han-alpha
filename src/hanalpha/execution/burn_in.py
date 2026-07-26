@@ -56,6 +56,7 @@ def persist_burn_in_session(
     capture_scenario: str = "repeated_connection",
     environment: str = "paper",
     broker_host: str = "127.0.0.1",
+    process_boot_id: str | None = None,
 ) -> Path:
     """Export one Observer session and its self-verifying immutable manifest."""
 
@@ -86,6 +87,7 @@ def persist_burn_in_session(
             capture_scenario=capture_scenario,
             environment=environment,
             broker_host=broker_host,
+            process_boot_id=process_boot_id,
             tape_hash=str(verification.manifest["files"]["tape.sqlite3"]),
             certificate_hash=str(verification.manifest["files"]["certificate.json"]),
         )
@@ -116,6 +118,7 @@ def persist_burn_in_session(
         capture_scenario=capture_scenario,
         environment=environment,
         broker_host=broker_host,
+        process_boot_id=process_boot_id,
         tape_hash=sha256_file(tape_path),
         certificate_hash=sha256_file(certificate_path),
     )
@@ -498,6 +501,7 @@ def _build_manifest(
     capture_scenario: str,
     environment: str,
     broker_host: str,
+    process_boot_id: str | None,
     tape_hash: str,
     certificate_hash: str,
 ) -> dict[str, Any]:
@@ -600,4 +604,6 @@ def _build_manifest(
             "certificate.json": certificate_hash,
         },
     }
+    if process_boot_id is not None:
+        body["process_boot_id"] = process_boot_id
     return {"manifest_id": canonical_hash(body), **body}

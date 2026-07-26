@@ -243,8 +243,14 @@ def _receipt(event_type: E1EventType, details: dict[str, object], phase: str = "
             E1ScenarioType.PROCESS_RESTART,
             E1ScopeName.API,
             [
-                _manifest(manifest_id="1" * 64),
-                _manifest(manifest_id="2" * 64),
+                {
+                    **_manifest(manifest_id="1" * 64),
+                    "process_boot_id": "one",
+                },
+                {
+                    **_manifest(manifest_id="2" * 64),
+                    "process_boot_id": "two",
+                },
             ],
             (
                 _receipt(E1EventType.PROCESS_BOOT, {"boot_id": "one"}, "PRE"),

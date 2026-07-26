@@ -62,6 +62,9 @@ capability.
   process/TWS/network/nightly/client-switch evidence. The single acceptance
   policy fixes API topology at 22 same-Scope plus two cross-Scope Sessions (24
   total), and ALL at 9+1 (10 total).
+- Every new Session binds the capture process boot UUID. A Process Restart Case
+  rejects receipts that do not exactly match two distinct child Session boot
+  UUIDs; a later label or fabricated PID cannot satisfy it.
 - Client 41 point-in-time all-open-orders snapshots are distinct from future
   Client-0 manual-order binding. Raw callback facts retain evidence-based order
   origin rather than treating a scenario label as provenance.

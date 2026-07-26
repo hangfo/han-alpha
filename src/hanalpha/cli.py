@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -114,6 +115,7 @@ app.add_typer(r1_app, name="r1")
 console = Console()
 SECRET_STDIN_MARKER = "HANALPHA_SECRET_STDIN_V1"
 SECRET_STDIN_LIMIT = 65_536
+PROCESS_BOOT_ID = str(uuid.uuid4())
 
 
 @app.callback()
@@ -402,6 +404,7 @@ def ibkr_observe(
                     capture_scenario=capture_scenario,
                     environment=secrets.hanalpha_env,
                     broker_host=secrets.ibkr_host,
+                    process_boot_id=PROCESS_BOOT_ID,
                 )
                 manifest = json.loads((session_dir / "manifest.json").read_text(encoding="utf-8"))
                 registry.register(
@@ -1147,6 +1150,10 @@ def e1_event_receipt(
     if not isinstance(details, dict):
         raise typer.BadParameter("details must be a JSON object")
     manifest = verification.manifest
+    if event_type is E1EventType.PROCESS_BOOT and details.get("boot_id") != manifest.get(
+        "process_boot_id"
+    ):
+        raise typer.BadParameter("PROCESS_BOOT receipt must match the captured process boot ID")
     receipt_time = datetime.now(UTC)
     if observed_at is not None:
         try:

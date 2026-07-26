@@ -703,7 +703,7 @@ Implemented locally:
   with exact account binding and immutable pre/post receipts.
 
 VERIFIED locally: `preflight.sh` and `verify_all.sh`; strict mypy over 116
-source files; 297 passing Python tests plus one skipped; 85.03% branch-aware
+source files; 297 passing Python tests plus one skipped; 85.04% branch-aware
 coverage; package, CLI/API/research smoke, dependency audit and frontend
 lint/type/test/build. VERIFIED externally remains limited to the
 existing five unmodified empty-account Sessions plus a post-hardening,

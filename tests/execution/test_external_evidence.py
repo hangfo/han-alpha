@@ -184,6 +184,7 @@ def test_burn_in_session_exports_only_bound_tape_and_hashes(tmp_path) -> None:
             vote_disposition="ACCEPTED_FIRST",
             consensus_count_after_vote=1,
             equivalence_receipt={"state_equivalent": True},
+            process_boot_id="boot-1",
         )
         assert (
             persist_burn_in_session(
@@ -201,6 +202,7 @@ def test_burn_in_session_exports_only_bound_tape_and_hashes(tmp_path) -> None:
                 vote_disposition="ACCEPTED_FIRST",
                 consensus_count_after_vote=1,
                 equivalence_receipt={"state_equivalent": True},
+                process_boot_id="boot-1",
             )
             == session_dir
         )
@@ -241,6 +243,7 @@ def test_burn_in_session_exports_only_bound_tape_and_hashes(tmp_path) -> None:
     }
     assert manifest["account_identity"]["account_hash"] == certificate.account_hash
     assert manifest["account_identity_hash"] == manifest["account_identity"]["identity_hash"]
+    assert manifest["process_boot_id"] == "boot-1"
     assert manifest["safety_case_eligible"] is True
     assert len(manifest["files"]["tape.sqlite3"]) == 64
     assert verify_burn_in_manifest(session_dir).verified
