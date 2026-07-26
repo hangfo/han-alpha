@@ -153,6 +153,9 @@ class VisibilityScope(BaseModel):
     configured_account_seen: bool
     client_id: int
     master_client: bool
+    current_all_open_orders_snapshot_requested: bool = False
+    future_manual_order_updates_bound: bool = False
+    future_other_api_order_updates_visible: bool = False
     manual_tws_orders_visible: bool
     other_api_clients_visible: bool
     execution_history_start: datetime
@@ -528,9 +531,7 @@ class IBKRFactStore:
                     )
                 )
             exported.save_certificate(
-                SnapshotCompletenessCertificate.model_validate_json(
-                    certificate["certificate_json"]
-                )
+                SnapshotCompletenessCertificate.model_validate_json(certificate["certificate_json"])
             )
         finally:
             exported.close()
@@ -685,6 +686,7 @@ class IBKRCallbackCollector:
         base_currency: str = "USD",
         client_id: int = 0,
         master_client: bool = False,
+        auto_bind_tws_orders: bool = False,
     ) -> None:
         self.sink = sink
         self.session_id = session_id
@@ -693,6 +695,7 @@ class IBKRCallbackCollector:
         self.base_currency = base_currency
         self.client_id = client_id
         self.master_client = master_client
+        self.auto_bind_tws_orders = auto_bind_tws_orders
 
     def record(
         self,
@@ -846,7 +849,10 @@ class IBKRCallbackCollector:
             "configured_account_hash": self.configured_account_hash,
             "client_id": self.client_id,
             "master_client": self.master_client,
-            "manual_tws_orders_visible": self.client_id == 0 or self.master_client,
+            "current_all_open_orders_snapshot_requested": True,
+            "future_manual_order_updates_bound": self.auto_bind_tws_orders,
+            "future_other_api_order_updates_visible": self.master_client,
+            "manual_tws_orders_visible": self.auto_bind_tws_orders,
             "other_api_clients_visible": self.master_client,
             "execution_query_scope": (barrier.execution_query_scope if barrier else "UNDECLARED"),
             "open_order_query": barrier.open_order_query if barrier else "UNDECLARED",
@@ -867,7 +873,10 @@ class IBKRCallbackCollector:
                 "configured_account_seen": configured_seen,
                 "client_id": self.client_id,
                 "master_client": self.master_client,
-                "manual_tws_orders_visible": self.client_id == 0 or self.master_client,
+                "current_all_open_orders_snapshot_requested": True,
+                "future_manual_order_updates_bound": self.auto_bind_tws_orders,
+                "future_other_api_order_updates_visible": self.master_client,
+                "manual_tws_orders_visible": self.auto_bind_tws_orders,
                 "other_api_clients_visible": self.master_client,
                 "execution_history_start": observation_window.execution_history_start,
                 "execution_history_end": observation_window.execution_history_end,

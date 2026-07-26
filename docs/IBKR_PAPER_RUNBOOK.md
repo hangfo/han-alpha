@@ -20,6 +20,9 @@
   `--capture-scenario`, then run `hanalpha ibkr-burn-in-evaluate`. Capture success
   is not acceptance; the evaluator returns exit code 2 for incomplete stability
   or scenario coverage.
+- Labels schedule capture only. Build real event receipts with
+  `hanalpha e1 event-receipt` and typed cases with `hanalpha e1 build-case`;
+  restart/recovery/client-switch coverage is zero until the Case passes.
 - Require `complete=true`; a TCP connection without all end markers is incomplete.
 - Require `accepted_facts == written_facts`, `dropped_facts == 0` and no writer error.
 - Track complete observations separately from consecutive stable Authority sessions; a divergent reset is not a stable vote.
@@ -40,6 +43,32 @@
 - Compare account values with TWS manually.
 - Compare positions and open orders.
 - Generate an order plan without submission.
+
+## Isolated E1 Paper fixture
+
+`scripts/e1_paper_fixture.py` is test infrastructure, not the Han Alpha Writer.
+It refuses non-Paper ports, production write-enabled configuration, non-STK
+instruments, fractional/multiple shares, more than USD 1,000 notional, ambiguous
+accounts and client IDs outside 9100–9199. It has no global-cancel operation.
+
+Create and execute exactly one Permit at a time. Never place account identifiers
+or credentials in arguments:
+
+```bash
+.venv/bin/python scripts/e1_paper_fixture.py create-permit \
+  --action PLACE --symbol SPY --quantity 1 --limit-price <REVIEWED_LIMIT> \
+  --port 7497 --client-id 9100 --attest-paper
+
+.venv/bin/python scripts/e1_paper_fixture.py execute \
+  --permit <IMMUTABLE_PERMIT_PATH>
+```
+
+Modification/cancellation requires a new Permit bound to the exact fixture
+Broker order ID and `E1FIX:` order ref. Position removal uses
+`CLOSE_POSITION` and fails unless the Broker proves exactly one long share.
+Each Permit is consumed before the write; an uncertain outcome is inspected and
+never retried. Keep TWS API Read-Only enabled until the operator explicitly
+chooses to run this fixture, then re-enable it after the bounded action.
 
 Do not enable Paper submission until 30 observations, consecutive stability, Golden Tapes,
 nightly reset, realtime Quote/calendar authority, durable writer, real cancel, bracket

@@ -13,11 +13,16 @@ from typer.testing import CliRunner
 from hanalpha.cli import app
 from hanalpha.config import SecretSettings, load_config
 from hanalpha.execution.burn_in import (
+    _scope_compatibility_hash,
     evaluate_burn_in_corpus,
     persist_burn_in_session,
     verify_burn_in_manifest,
 )
 from hanalpha.execution.control_models import BrokerSnapshot
+from hanalpha.execution.e1_scenarios import (
+    E1EventType,
+    create_event_receipt,
+)
 from hanalpha.execution.golden_tape import evaluate_golden_tape_corpus
 from hanalpha.execution.ibkr_observer import (
     IBKRCallbackCollector,
@@ -239,9 +244,7 @@ def test_burn_in_session_exports_only_bound_tape_and_hashes(tmp_path) -> None:
     assert manifest["safety_case_eligible"] is True
     assert len(manifest["files"]["tape.sqlite3"]) == 64
     assert verify_burn_in_manifest(session_dir).verified
-    invalid_manifest = json.loads(
-        (invalid_scenario_dir / "manifest.json").read_text()
-    )
+    invalid_manifest = json.loads((invalid_scenario_dir / "manifest.json").read_text())
     assert invalid_manifest["safety_case_eligible"] is False
     assert invalid_manifest["ineligibility_reasons"] == [
         "SCENARIO_STATIC_POSITION_MISSING_POSITION"
@@ -306,6 +309,31 @@ def test_corpus_evaluation_fails_closed_without_stable_eligible_matrix(tmp_path)
     assert evaluation.decision == "BLOCKED"
     assert "INSUFFICIENT_ELIGIBLE_SESSIONS" in evaluation.reasons
     assert len(evaluation.corpus["corpus_id"]) == 64
+
+
+def test_scope_compatibility_preserves_existing_client_41_sessions() -> None:
+    legacy_policy = {
+        "configured_account_hash": "a" * 64,
+        "client_id": 41,
+        "master_client": False,
+        "manual_tws_orders_visible": False,
+        "other_api_clients_visible": False,
+        "execution_query_scope": "FILTER_TIME_FROM_UTC_DAY_START",
+        "open_order_query": "ALL_OPEN_ORDERS",
+        "completed_orders_requested": True,
+        "completed_orders_api_only": True,
+        "completed_order_date_scope": "BROKER_RETAINED_COMPLETED_ORDERS",
+        "base_currency": "USD",
+    }
+    explicit_policy = {
+        **legacy_policy,
+        "current_all_open_orders_snapshot_requested": True,
+        "future_manual_order_updates_bound": False,
+        "future_other_api_order_updates_visible": False,
+    }
+    assert _scope_compatibility_hash({"scope_policy": legacy_policy}) == _scope_compatibility_hash(
+        {"scope_policy": explicit_policy}
+    )
 
 
 def test_burn_in_manifest_verification_rejects_missing_and_invalid_json(tmp_path) -> None:
@@ -630,6 +658,34 @@ def test_artifact_registry_requires_valid_schema_and_policy(tmp_path) -> None:
     assert burn_resolution.artifact_schema_valid
     assert "ARTIFACT_POLICY_NOT_PASSED" in burn_resolution.reasons
     registry.close()
+
+
+def test_e1_event_receipt_is_hash_verified_by_artifact_registry(tmp_path) -> None:
+    receipt = create_event_receipt(
+        event_type=E1EventType.PROCESS_BOOT,
+        phase="POST",
+        observed_at=NOW,
+        account_identity_hash="a" * 64,
+        git_commit="b" * 40,
+        config_hash="c" * 64,
+        details={"boot_id": "boot-1"},
+    )
+    path = tmp_path / "event-receipt.json"
+    write_immutable_json(path, receipt.model_dump(mode="json"))
+    registry = ArtifactRegistry(tmp_path / "registry.sqlite3")
+    try:
+        artifact_id = registry.register(
+            path,
+            artifact_type=ArtifactType.E1_EVENT_RECEIPT,
+            status="VERIFIED",
+            at=NOW,
+        )
+        assert registry.resolve(
+            artifact_id,
+            expected_type=ArtifactType.E1_EVENT_RECEIPT,
+        ).verified
+    finally:
+        registry.close()
 
 
 def _register_safety_artifacts(registry: ArtifactRegistry, root: Path) -> dict[str, str]:

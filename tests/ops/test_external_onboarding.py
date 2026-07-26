@@ -3,7 +3,7 @@ from __future__ import annotations
 import ctypes
 import subprocess
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,6 +11,7 @@ import pytest
 from typer.testing import CliRunner
 
 import hanalpha.cli as cli_module
+import hanalpha.execution.e1_scenarios as e1_scenarios_module
 import hanalpha.ops.external_runners as external_runners_module
 import hanalpha.ops.onboarding as onboarding_module
 import hanalpha.ops.secrets as secrets_module
@@ -130,8 +131,8 @@ def test_native_keychain_framework_and_find_bridge(monkeypatch) -> None:
 
     def find(*args):
         ctypes.cast(args[5], ctypes.POINTER(ctypes.c_uint32)).contents.value = 6
-        ctypes.cast(args[6], ctypes.POINTER(ctypes.c_void_p)).contents.value = (
-            ctypes.addressof(password)
+        ctypes.cast(args[6], ctypes.POINTER(ctypes.c_void_p)).contents.value = ctypes.addressof(
+            password
         )
         ctypes.cast(args[7], ctypes.POINTER(ctypes.c_void_p)).contents.value = 123
         return 0
@@ -155,8 +156,8 @@ def test_native_keychain_get_and_set_paths(monkeypatch) -> None:
     released: list[int | None] = []
     freed: list[int | None] = []
     core.CFRelease = lambda pointer: released.append(pointer.value)
-    security.SecKeychainItemFreeContent = (
-        lambda _attributes, pointer: freed.append(pointer.value) or 0
+    security.SecKeychainItemFreeContent = lambda _attributes, pointer: (
+        freed.append(pointer.value) or 0
     )
 
     def found(status: int):
@@ -193,9 +194,7 @@ def test_native_keychain_get_and_set_paths(monkeypatch) -> None:
     created_item = ctypes.c_void_p(456)
 
     def create(*args):
-        ctypes.cast(args[7], ctypes.POINTER(ctypes.c_void_p)).contents.value = (
-            created_item.value
-        )
+        ctypes.cast(args[7], ctypes.POINTER(ctypes.c_void_p)).contents.value = created_item.value
         return 0
 
     monkeypatch.setattr(
@@ -264,8 +263,7 @@ def test_official_ibapi_installer_requires_attestation_and_rejects_traversal(
         valid,
         license_accepted=True,
         runner=lambda arguments, **_kwargs: (
-            calls.append(arguments)
-            or subprocess.CompletedProcess(arguments, 0, "", "")
+            calls.append(arguments) or subprocess.CompletedProcess(arguments, 0, "", "")
         ),
     )
     assert version == "10.48.1"
@@ -285,9 +283,7 @@ def test_official_ibapi_installer_requires_attestation_and_rejects_traversal(
         install_official_ibapi_archive(unsafe, license_accepted=True)
 
 
-def test_ibkr_application_detection_supports_nested_macos_install(
-    tmp_path, monkeypatch
-) -> None:
+def test_ibkr_application_detection_supports_nested_macos_install(tmp_path, monkeypatch) -> None:
     nested = tmp_path / "Applications" / "Trader Workstation"
     nested.mkdir(parents=True)
     application = nested / "Trader Workstation.app"
@@ -499,9 +495,140 @@ def test_e1_progress_counts_only_verified_eligible_scope_sessions(tmp_path, monk
 
     monkeypatch.setattr(external_runners_module, "verify_burn_in_manifest", verify)
     progress = e1_progress(tmp_path / "api", E1Scope.API)
-    assert progress["status"] == OperatorStatus.PASS
-    assert progress["next_scenario"] is None
+    assert progress["status"] == OperatorStatus.BLOCKED_HUMAN_ACTION
+    assert progress["next_scenario"] == "static_position"
+    assert progress["next_action_kind"] == "SCENARIO_CASE"
+    assert progress["missing_counts"] == {
+        scenario: 0 for scenario, _ in external_runners_module.E1_SCENARIOS[E1Scope.API]
+    }
     assert progress["invalid_session_count"] == 1
+
+
+def test_e1_event_receipt_cli_binds_verified_session_and_registers(tmp_path, monkeypatch) -> None:
+    session_dir = tmp_path / "api" / "sessions" / "session"
+    session_dir.mkdir(parents=True)
+    manifest = {
+        "account_identity_hash": "a" * 64,
+        "git_commit": "b" * 40,
+        "config_hash": "c" * 64,
+    }
+    verification = SimpleNamespace(
+        verified=True,
+        manifest_id="d" * 64,
+        manifest=manifest,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_e1_session_by_manifest_id",
+        lambda *_args: session_dir,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "verify_burn_in_manifest",
+        lambda *_args: verification,
+    )
+    details = tmp_path / "details.json"
+    write_immutable_json(details, {"boot_id": "boot-1"})
+    registry = tmp_path / "registry.sqlite3"
+    result = CliRunner().invoke(
+        app,
+        [
+            "e1",
+            "event-receipt",
+            "--input",
+            str(tmp_path / "api"),
+            "--session-id",
+            "d" * 64,
+            "--event-type",
+            "PROCESS_BOOT",
+            "--phase",
+            "POST",
+            "--details",
+            str(details),
+            "--observed-at",
+            NOW.isoformat(),
+            "--registry",
+            str(registry),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    receipts = tuple((tmp_path / "api" / "receipts").glob("*.json"))
+    assert len(receipts) == 1
+    artifact_registry = ArtifactRegistry(registry)
+    try:
+        assert artifact_registry.ops_summary()["type_counts"] == {
+            ArtifactType.E1_EVENT_RECEIPT.value: 1
+        }
+    finally:
+        artifact_registry.close()
+
+
+def test_e1_build_case_cli_persists_passed_cross_scope_case(tmp_path, monkeypatch) -> None:
+    manifests = [
+        {
+            "manifest_id": "1" * 64,
+            "account_identity_hash": "a" * 64,
+            "git_commit": "b" * 40,
+            "config_hash": "c" * 64,
+            "normalization_policy_hash": "d" * 64,
+            "tws_server_version": "188",
+            "ibapi_version": "10.48.1",
+            "scope_hash": "4" * 64,
+            "client_id": 41,
+        },
+        {
+            "manifest_id": "2" * 64,
+            "account_identity_hash": "a" * 64,
+            "git_commit": "b" * 40,
+            "config_hash": "c" * 64,
+            "normalization_policy_hash": "d" * 64,
+            "tws_server_version": "188",
+            "ibapi_version": "10.48.1",
+            "scope_hash": "5" * 64,
+            "client_id": 42,
+        },
+    ]
+    case = e1_scenarios_module._scenario_case_document(
+        scenario_type=e1_scenarios_module.E1ScenarioType.CLIENT_ID_SWITCH,
+        scope=e1_scenarios_module.E1ScopeName.API,
+        manifests=manifests,
+        receipts=(),
+        expected_transition="CROSS_SCOPE_STATE_COMPATIBLE",
+        observed_transition="CLIENT_AND_SCOPE_CHANGED_STATE_COMPATIBLE",
+        reasons=[],
+        effective_from=NOW,
+        expires_at=NOW + timedelta(days=1),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_e1_session_by_manifest_id",
+        lambda _root, manifest_id: tmp_path / manifest_id,
+    )
+    monkeypatch.setattr(cli_module, "build_scenario_case", lambda **_kwargs: case)
+    registry = tmp_path / "registry.sqlite3"
+    input_root = tmp_path / "api"
+    input_root.mkdir()
+    result = CliRunner().invoke(
+        app,
+        [
+            "e1",
+            "build-case",
+            "--input",
+            str(input_root),
+            "--scope",
+            "api",
+            "--scenario",
+            "client_id_switch",
+            "--session-id",
+            "1" * 64,
+            "--session-id",
+            "2" * 64,
+            "--registry",
+            str(registry),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert (input_root / "cases" / f"{case.artifact_id}.json").is_file()
 
 
 @pytest.mark.asyncio

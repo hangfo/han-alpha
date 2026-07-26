@@ -109,6 +109,12 @@ Callback Corpus、Vendor Rights/Samples和独立签名仍未发生，因此E1-B/
 nightly reset/client切换和每个Broker写入仍未验证，所以IBKR Paper整项继续
 不勾选，E2/E3不得启动。
 
+Issue #5 本地加固已完成：restart/recovery 不再能由标签冒充；统一政策明确
+API 22个同Scope + 2个跨Scope Session、ALL 9+1；Client-switch 仅通过跨Scope
+Case；Observer改为正向只读方法白名单；订单快照与未来自动绑定分离；受限
+Paper fixture 仅作为一次性测试事实生产器。尚未执行任何fixture Broker写入，
+也尚无真实static/API/manual order或reset Case，因此E1-B仍不勾选。
+
 ## 8. 工程质量
 
 - [x] Ruff通过。

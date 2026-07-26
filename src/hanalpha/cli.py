@@ -24,8 +24,17 @@ from hanalpha.data.synthetic import SyntheticMarketDataProvider
 from hanalpha.execution.burn_in import (
     evaluate_burn_in_corpus,
     persist_burn_in_session,
+    verify_burn_in_manifest,
 )
 from hanalpha.execution.control_store import DurableExecutionStore
+from hanalpha.execution.e1_scenarios import (
+    E1EventReceipt,
+    E1EventType,
+    E1ScenarioType,
+    E1ScopeName,
+    build_scenario_case,
+    create_event_receipt,
+)
 from hanalpha.execution.fake_broker import DurableFakeBroker
 from hanalpha.execution.golden_tape import evaluate_golden_tape_corpus
 from hanalpha.execution.ibkr import IBKRBroker
@@ -477,7 +486,12 @@ def ibkr_burn_in_evaluate(
     """Evaluate captured sessions and fail nonzero unless the corpus passes."""
 
     session_dirs = tuple(path for path in (input_root / "sessions").iterdir() if path.is_dir())
-    evaluation = evaluate_burn_in_corpus(session_dirs, minimum_sessions=minimum_sessions)
+    case_paths = tuple((input_root / "cases").glob("*.json"))
+    evaluation = evaluate_burn_in_corpus(
+        session_dirs,
+        scenario_case_paths=case_paths,
+        minimum_sessions=minimum_sessions,
+    )
     write_immutable_json(output, evaluation.corpus)
     registry = ArtifactRegistry(registry_path)
     try:
@@ -760,9 +774,7 @@ def pit_evidence_list(
 def local_onboard_ibkr(
     output: Annotated[Path, typer.Option("--output")] = Path(".state/onboarding"),
     launch: Annotated[bool, typer.Option("--launch/--no-launch")] = False,
-    wait_seconds: Annotated[
-        float, typer.Option("--wait-seconds", min=0.0, max=300.0)
-    ] = 0.0,
+    wait_seconds: Annotated[float, typer.Option("--wait-seconds", min=0.0, max=300.0)] = 0.0,
     read_only_attested: Annotated[
         bool, typer.Option("--read-only-attested/--read-only-not-attested")
     ] = False,
@@ -802,14 +814,10 @@ def local_onboard_ibkr(
         at=datetime.now(UTC),
     )
     if report["status"] is OperatorStatus.PASS and not read_only_attested:
-        report_body = {
-            key: value for key, value in report.items() if key != "report_id"
-        }
+        report_body = {key: value for key, value in report.items() if key != "report_id"}
         report_body["status"] = OperatorStatus.BLOCKED_HUMAN_ACTION
         report_body["blockers"] = ["ATTEST_TWS_READ_ONLY_FOR_ACCOUNT_PREFLIGHT"]
-        report_body["next_permitted_command"] = (
-            "hanalpha local-onboard ibkr --read-only-attested"
-        )
+        report_body["next_permitted_command"] = "hanalpha local-onboard ibkr --read-only-attested"
         report = {"report_id": canonical_hash(report_body), **report_body}
     elif report["status"] is OperatorStatus.PASS:
         preflight_code = _run_secret_child(
@@ -823,9 +831,7 @@ def local_onboard_ibkr(
             ],
             secrets,
         )
-        report_body = {
-            key: value for key, value in report.items() if key != "report_id"
-        }
+        report_body = {key: value for key, value in report.items() if key != "report_id"}
         report_body["preflight_registered"] = preflight_code == 0
         if preflight_code != 0:
             report_body["status"] = OperatorStatus.FAILED_CODE
@@ -1013,7 +1019,11 @@ def e1_run(
         raise typer.Exit(code=status_exit(onboarding["status"]))
     scope_root = output / scope.value
     progress = e1_progress(scope_root, scope)
-    if execute and progress["next_scenario"]:
+    if (
+        execute
+        and progress["next_scenario"]
+        and progress.get("next_action_kind", "SESSION_CAPTURE") == "SESSION_CAPTURE"
+    ):
         mode_flags = (
             ["--read-only-attested"]
             if read_only_attested
@@ -1075,11 +1085,7 @@ def e1_run(
                         "--input",
                         str(scope_root),
                         "--output",
-                        str(
-                            scope_root
-                            / "corpora"
-                            / f"{progress['report_id']}.json"
-                        ),
+                        str(scope_root / "corpora" / f"{progress['report_id']}.json"),
                         "--registry",
                         secrets.hanalpha_artifact_registry_path,
                     ],
@@ -1102,6 +1108,129 @@ def e1_run(
     )
     if progress["status"] is not OperatorStatus.PASS:
         raise typer.Exit(code=status_exit(progress["status"]))
+
+
+def _e1_session_by_manifest_id(input_root: Path, manifest_id: str) -> Path:
+    matches: list[Path] = []
+    search_root = input_root.parent
+    for session_dir in search_root.glob("*/sessions/*"):
+        if not session_dir.is_dir():
+            continue
+        verification = verify_burn_in_manifest(session_dir)
+        if verification.verified and verification.manifest_id == manifest_id:
+            matches.append(session_dir)
+    if len(matches) != 1:
+        raise typer.BadParameter("session manifest ID must resolve exactly once")
+    return matches[0]
+
+
+@e1_app.command("event-receipt")
+def e1_event_receipt(
+    input_root: Annotated[Path, typer.Option("--input", exists=True, file_okay=False)],
+    session_id: Annotated[str, typer.Option("--session-id")],
+    event_type: Annotated[E1EventType, typer.Option("--event-type")],
+    phase: Annotated[str, typer.Option("--phase")],
+    details_file: Annotated[Path, typer.Option("--details", exists=True, dir_okay=False)],
+    observed_at: Annotated[str | None, typer.Option("--observed-at")] = None,
+    registry_path: Annotated[Path, typer.Option("--registry")] = Path(
+        ".state/evidence-artifacts.sqlite3"
+    ),
+) -> None:
+    """Create a redacted event receipt bound to one verified E1 session."""
+
+    session_dir = _e1_session_by_manifest_id(input_root, session_id)
+    verification = verify_burn_in_manifest(session_dir)
+    try:
+        details = json.loads(details_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise typer.BadParameter("details must be a valid JSON object") from exc
+    if not isinstance(details, dict):
+        raise typer.BadParameter("details must be a JSON object")
+    manifest = verification.manifest
+    receipt_time = datetime.now(UTC)
+    if observed_at is not None:
+        try:
+            receipt_time = datetime.fromisoformat(observed_at)
+        except ValueError as exc:
+            raise typer.BadParameter("--observed-at must be ISO-8601") from exc
+        if receipt_time.tzinfo is None:
+            raise typer.BadParameter("--observed-at must include a timezone")
+    receipt = create_event_receipt(
+        event_type=event_type,
+        phase=phase,
+        observed_at=receipt_time,
+        account_identity_hash=str(manifest["account_identity_hash"]),
+        git_commit=str(manifest["git_commit"]),
+        config_hash=str(manifest["config_hash"]),
+        details=details,
+    )
+    destination = input_root / "receipts" / f"{receipt.artifact_id}.json"
+    write_immutable_json(destination, receipt.model_dump(mode="json"))
+    registry = ArtifactRegistry(registry_path)
+    try:
+        registry.register(
+            destination,
+            artifact_type=ArtifactType.E1_EVENT_RECEIPT,
+            status="VERIFIED",
+            git_commit=receipt.git_commit,
+            config_hash=receipt.config_hash,
+            account_hash=receipt.account_identity_hash,
+        )
+    finally:
+        registry.close()
+    console.print_json(receipt.model_dump_json())
+
+
+@e1_app.command("build-case")
+def e1_build_case(
+    input_root: Annotated[Path, typer.Option("--input", exists=True, file_okay=False)],
+    scope: Annotated[E1ScopeName, typer.Option("--scope")],
+    scenario: Annotated[E1ScenarioType, typer.Option("--scenario")],
+    session_ids: Annotated[list[str], typer.Option("--session-id")],
+    receipt_ids: Annotated[list[str] | None, typer.Option("--receipt-id")] = None,
+    valid_hours: Annotated[int, typer.Option("--valid-hours", min=1, max=720)] = 168,
+    registry_path: Annotated[Path, typer.Option("--registry")] = Path(
+        ".state/evidence-artifacts.sqlite3"
+    ),
+) -> None:
+    """Build one immutable typed scenario case from verified child evidence."""
+
+    session_dirs = tuple(
+        _e1_session_by_manifest_id(input_root, manifest_id) for manifest_id in session_ids
+    )
+    receipts: list[E1EventReceipt] = []
+    for artifact_id in receipt_ids or ():
+        path = input_root / "receipts" / f"{artifact_id}.json"
+        if not path.is_file():
+            raise typer.BadParameter("receipt ID does not resolve")
+        receipts.append(E1EventReceipt.model_validate_json(path.read_text(encoding="utf-8")))
+    effective_from = datetime.now(UTC)
+    case = build_scenario_case(
+        scenario_type=scenario,
+        scope=scope,
+        session_dirs=session_dirs,
+        event_receipts=receipts,
+        effective_from=effective_from,
+        expires_at=effective_from + timedelta(hours=valid_hours),
+    )
+    destination = input_root / "cases" / f"{case.artifact_id}.json"
+    write_immutable_json(destination, case.model_dump(mode="json"))
+    registry = ArtifactRegistry(registry_path)
+    try:
+        registry.register(
+            destination,
+            artifact_type=ArtifactType.E1_SCENARIO_CASE,
+            status="VERIFIED" if case.decision == "PASS" else "REJECTED",
+            git_commit=case.git_commit,
+            config_hash=case.config_hash,
+            scope_hash=canonical_hash({"scope": case.scope, "scope_hashes": case.scope_hashes}),
+            account_hash=case.account_identity_hash,
+        )
+    finally:
+        registry.close()
+    console.print_json(case.model_dump_json())
+    if case.decision != "PASS":
+        raise typer.Exit(code=2)
 
 
 @r1_app.command("run")

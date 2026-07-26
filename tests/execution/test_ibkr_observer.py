@@ -155,9 +155,7 @@ def test_optional_account_summary_tags_do_not_block_completeness(tmp_path) -> No
             collector,
             omitted_account_tags=frozenset({"SettledCash", "AccruedCash"}),
         )
-        certificate = collector.certificate(
-            store, at=NOW, queue_drained=True, final_watermark=10
-        )
+        certificate = collector.certificate(store, at=NOW, queue_drained=True, final_watermark=10)
         assert certificate.required_account_tags_seen
         assert certificate.cash_snapshot_complete
         assert certificate.complete
@@ -166,9 +164,7 @@ def test_optional_account_summary_tags_do_not_block_completeness(tmp_path) -> No
 
 
 @pytest.mark.parametrize("missing_tag", ["NetLiquidation", "TotalCashValue", "BuyingPower"])
-def test_missing_authoritative_account_tag_rejects_completeness(
-    tmp_path, missing_tag: str
-) -> None:
+def test_missing_authoritative_account_tag_rejects_completeness(tmp_path, missing_tag: str) -> None:
     store = IBKRFactStore(tmp_path / f"{missing_tag}.sqlite3")
     session = store.start_session(host="127.0.0.1", port=7497, client_id=19, at=NOW)
     collector = IBKRCallbackCollector(
@@ -181,9 +177,7 @@ def test_missing_authoritative_account_tag_rejects_completeness(
     )
     try:
         _semantic_facts(collector, omitted_account_tags=frozenset({missing_tag}))
-        certificate = collector.certificate(
-            store, at=NOW, queue_drained=True, final_watermark=10
-        )
+        certificate = collector.certificate(store, at=NOW, queue_drained=True, final_watermark=10)
         assert not certificate.required_account_tags_seen
         assert not certificate.cash_snapshot_complete
         assert not certificate.complete
@@ -405,6 +399,68 @@ def test_perm_id_zero_bracket_legs_remain_distinct_by_leg_order_ref(tmp_path) ->
         store.close()
 
 
+def test_observer_eclient_exposes_only_audited_broker_operations() -> None:
+    app = ibkr_module._ObserverOnlyIBApp()
+    operation_names = {
+        name
+        for name in dir(ibkr_module.EClient)
+        if not name.startswith("_") and callable(getattr(ibkr_module.EClient, name, None))
+    }
+    assert operation_names >= app.OBSERVER_ECLIENT_ALLOWLIST
+    for name in operation_names - app.OBSERVER_ECLIENT_ALLOWLIST - app._TRANSPORT_ECLIENT_ALLOWLIST:
+        with pytest.raises(PermissionError, match="observer-only"):
+            getattr(app, name)()
+
+
+def test_order_payload_uses_callback_evidence_without_relabeling_origin() -> None:
+    contract = type(
+        "Contract",
+        (),
+        {
+            "symbol": "AAPL",
+            "conId": 1,
+            "secType": "STK",
+            "currency": "USD",
+        },
+    )()
+    state = type("State", (), {"status": "Submitted"})()
+    api_order = type(
+        "Order",
+        (),
+        {
+            "permId": 1,
+            "parentId": 0,
+            "clientId": 41,
+            "orderRef": "E1FIX:known",
+            "account": ACCOUNT,
+            "action": "BUY",
+            "totalQuantity": 1,
+            "orderType": "LMT",
+            "lmtPrice": 1,
+            "auxPrice": 0,
+            "tif": "DAY",
+            "transmit": True,
+            "ocaGroup": "",
+            "outsideRth": False,
+            "goodTillDate": "",
+        },
+    )()
+    assert (
+        ibkr_module._IBApp._order_payload(1, contract, api_order, state)["origin_evidence"]
+        == "HAN_ALPHA_ORDER_REF"
+    )
+    api_order.orderRef = ""
+    assert (
+        ibkr_module._IBApp._order_payload(1, contract, api_order, state)["origin_evidence"]
+        == "UNCLASSIFIED_CALLBACK"
+    )
+    api_order.clientId = 0
+    assert (
+        ibkr_module._IBApp._order_payload(1, contract, api_order, state)["origin_evidence"]
+        == "CLIENT_ZERO_CALLBACK"
+    )
+
+
 class _ObserverFakeApp:
     next_order_id = 42
     observer: IBKRCallbackCollector | None = None
@@ -588,6 +644,10 @@ async def test_observer_has_no_prerequests_drains_and_builds_reconciliation_snap
         certificate, model = await broker.observe_read_only(
             fact_store, timeout=0.5, drain_quiet_period=0.01
         )
+        assert certificate.visibility.current_all_open_orders_snapshot_requested
+        assert not certificate.visibility.future_manual_order_updates_bound
+        assert not certificate.visibility.future_other_api_order_updates_visible
+        assert not certificate.visibility.manual_tws_orders_visible
         assert certificate.complete
         assert certificate.queue_drained
         assert certificate.visibility.completed_orders_api_only is True
@@ -672,10 +732,7 @@ async def test_observer_completed_order_scopes_are_distinct_and_auditable(
         assert all_certificate.visibility.completed_orders_api_only is False
         assert not api_certificate.visibility.manual_completed_orders_visible
         assert all_certificate.visibility.manual_completed_orders_visible
-        assert (
-            api_certificate.visibility.scope_hash
-            != all_certificate.visibility.scope_hash
-        )
+        assert api_certificate.visibility.scope_hash != all_certificate.visibility.scope_hash
     finally:
         store.close()
 

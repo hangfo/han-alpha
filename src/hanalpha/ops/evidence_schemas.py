@@ -15,6 +15,10 @@ STRICT_DOCUMENT_TYPES = frozenset(
         ArtifactType.REVISION_AUDIT,
         ArtifactType.SYMBOLOGY_AUDIT,
         ArtifactType.SURVIVORSHIP_AUDIT,
+        ArtifactType.E1_SCENARIO_CASE,
+        ArtifactType.E1_EVENT_RECEIPT,
+        ArtifactType.E1_FIXTURE_PERMIT,
+        ArtifactType.E1_FIXTURE_RECEIPT,
     }
 )
 
@@ -27,6 +31,10 @@ SCHEMA_PREFIXES: dict[ArtifactType, str] = {
     ArtifactType.REVISION_AUDIT: "pit-revision-audit-",
     ArtifactType.SYMBOLOGY_AUDIT: "pit-symbology-audit-",
     ArtifactType.SURVIVORSHIP_AUDIT: "pit-survivorship-audit-",
+    ArtifactType.E1_SCENARIO_CASE: "e1-scenario-case-",
+    ArtifactType.E1_EVENT_RECEIPT: "e1-event-receipt-",
+    ArtifactType.E1_FIXTURE_PERMIT: "e1-fixture-permit-",
+    ArtifactType.E1_FIXTURE_RECEIPT: "e1-fixture-receipt-",
 }
 
 
@@ -59,6 +67,18 @@ def strict_document_valid(document: dict[str, Any], artifact_type: ArtifactType)
             and document.get("secrets_redacted") is True
             and isinstance(document.get("responses"), list)
             and bool(document["responses"])
+        )
+    if artifact_type in {
+        ArtifactType.E1_SCENARIO_CASE,
+        ArtifactType.E1_EVENT_RECEIPT,
+        ArtifactType.E1_FIXTURE_PERMIT,
+        ArtifactType.E1_FIXTURE_RECEIPT,
+    }:
+        return (
+            document.get("artifact_type") == artifact_type.value
+            and document.get("secrets_redacted") is True
+            and isinstance(document.get("artifact_id"), str)
+            and len(document["artifact_id"]) == 64
         )
     return (
         document.get("decision") in {"PASS", "BLOCKED", "APPROVED", "VERIFIED"}

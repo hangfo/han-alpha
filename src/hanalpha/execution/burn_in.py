@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,25 +34,6 @@ class BurnInCorpusEvaluation(BaseModel):
     decision: str
     reasons: tuple[str, ...]
     corpus: dict[str, Any]
-
-
-API_SCOPE_COVERAGE = {
-    "empty_account": 5,
-    "static_position": 5,
-    "api_order": 4,
-    "process_restart": 3,
-    "tws_restart": 2,
-    "network_recovery": 2,
-    "nightly_reset": 1,
-    "client_id_switch": 2,
-}
-ALL_SCOPE_COVERAGE = {
-    "manual_order": 4,
-    "process_restart": 2,
-    "tws_restart": 2,
-    "network_recovery": 1,
-    "client_id_switch": 1,
-}
 
 
 def persist_burn_in_session(
@@ -264,9 +246,18 @@ def verify_burn_in_manifest(session_dir: Path) -> BurnInManifestVerification:
 def evaluate_burn_in_corpus(
     session_dirs: Iterable[Path],
     *,
+    scenario_case_paths: Iterable[Path] = (),
     minimum_sessions: int | None = None,
     required_coverage: dict[str, int] | None = None,
+    required_case_coverage: dict[str, int] | None = None,
 ) -> BurnInCorpusEvaluation:
+    from hanalpha.execution.e1_scenarios import (
+        E1_ACCEPTANCE_POLICIES,
+        E1ScopeName,
+        load_scenario_cases,
+        scenario_case_counts,
+    )
+
     paths = tuple(sorted(session_dirs))
     manifests: list[dict[str, Any]] = []
     reasons: list[str] = []
@@ -276,27 +267,54 @@ def evaluate_burn_in_corpus(
             reasons.append(f"INVALID_SESSION:{session_dir.name}")
             continue
         manifests.append(verification.manifest)
-    api_only_values = {item.get("completed_orders_api_only") for item in manifests}
+    cross_scope_manifests = [
+        item for item in manifests if item.get("capture_scenario") == "client_id_switch"
+    ]
+    scope_manifests = [
+        item for item in manifests if item.get("capture_scenario") != "client_id_switch"
+    ]
+    api_only_values = {
+        item.get("completed_orders_scope") == "api"
+        if item.get("completed_orders_scope") in {"api", "all"}
+        else item.get("completed_orders_api_only")
+        for item in scope_manifests
+    }
     api_only = next(iter(api_only_values)) if len(api_only_values) == 1 else None
     if len(api_only_values) > 1:
         reasons.append("MIXED_COMPLETED_ORDERS_SCOPE")
-    threshold = minimum_sessions if minimum_sessions is not None else (30 if api_only else 10)
-    coverage_requirements = required_coverage or (
-        API_SCOPE_COVERAGE if api_only is True else ALL_SCOPE_COVERAGE
+    scope = E1ScopeName.API if api_only is True else E1ScopeName.ALL
+    policy = E1_ACCEPTANCE_POLICIES[scope]
+    threshold = minimum_sessions if minimum_sessions is not None else policy.minimum_scope_sessions
+    coverage_requirements = (
+        required_coverage if required_coverage is not None else policy.session_requirements
     )
-    if len(manifests) < threshold:
+    case_coverage_requirements = (
+        required_case_coverage
+        if required_case_coverage is not None
+        else {}
+        if required_coverage is not None
+        else policy.scenario_case_requirements
+    )
+    if len(scope_manifests) < threshold:
         reasons.append("INSUFFICIENT_ELIGIBLE_SESSIONS")
+    if (
+        minimum_sessions is None
+        and len(cross_scope_manifests) < policy.minimum_cross_scope_sessions
+    ):
+        reasons.append("INSUFFICIENT_CROSS_SCOPE_SESSIONS")
     binding_fields = (
-        "scope_hash",
         "account_hash",
         "git_commit",
         "config_hash",
         "normalization_policy_hash",
         "account_identity_hash",
     )
-    bindings = {
-        field: sorted({str(item.get(field)) for item in manifests}) for field in binding_fields
+    bindings: dict[str, list[str]] = {
+        field: sorted({str(item.get(field)) for item in scope_manifests})
+        for field in binding_fields
     }
+    bindings["scope_hash"] = sorted({_scope_compatibility_hash(item) for item in scope_manifests})
+    raw_scope_hashes = sorted({str(item.get("scope_hash")) for item in scope_manifests})
     for field, values in bindings.items():
         if len(values) != 1 or values == ["None"]:
             reasons.append(f"MIXED_OR_MISSING_{field.upper()}")
@@ -311,7 +329,7 @@ def evaluate_burn_in_corpus(
     divergent_resets = sum(
         1 for item in manifests if item.get("vote_disposition") == "ACCEPTED_DIVERGENT_RESET"
     )
-    consecutive_stable = max(
+    maximum_consensus_count = max(
         (int(item.get("consensus_count_after_vote", 0)) for item in manifests),
         default=0,
     )
@@ -321,8 +339,6 @@ def evaluate_burn_in_corpus(
         reasons.append("WRITER_ERRORS_PRESENT")
     if reconciliation_failures:
         reasons.append("RECONCILIATION_FAILURES_PRESENT")
-    if consecutive_stable < threshold:
-        reasons.append("CONSECUTIVE_STABILITY_BELOW_THRESHOLD")
     coverage_counts = {
         scenario: sum(1 for item in manifests if item.get("capture_scenario") == scenario)
         for scenario in coverage_requirements
@@ -330,6 +346,60 @@ def evaluate_burn_in_corpus(
     for scenario, required_count in coverage_requirements.items():
         if coverage_counts[scenario] < required_count:
             reasons.append(f"COVERAGE_MISSING:{scenario}")
+    try:
+        scenario_cases = load_scenario_cases(scenario_case_paths)
+    except (OSError, ValueError):
+        scenario_cases = ()
+        reasons.append("SCENARIO_CASE_INVALID")
+    expected_bindings = {
+        "account_identity_hash": bindings["account_identity_hash"][0]
+        if len(bindings["account_identity_hash"]) == 1
+        else None,
+        "git_commit": bindings["git_commit"][0] if len(bindings["git_commit"]) == 1 else None,
+        "config_hash": bindings["config_hash"][0] if len(bindings["config_hash"]) == 1 else None,
+        "normalization_policy_hash": bindings["normalization_policy_hash"][0]
+        if len(bindings["normalization_policy_hash"]) == 1
+        else None,
+    }
+    valid_cases = []
+    for case in scenario_cases:
+        mismatched = any(
+            expected is not None and str(getattr(case, field)) != expected
+            for field, expected in expected_bindings.items()
+        )
+        if mismatched:
+            reasons.append(f"SCENARIO_CASE_BINDING_MISMATCH:{case.artifact_id}")
+            continue
+        valid_cases.append(case)
+    valid_case_counts = scenario_case_counts(
+        valid_cases,
+        scope=scope,
+        at=datetime.now(UTC),
+    )
+    for scenario, required_count in case_coverage_requirements.items():
+        if valid_case_counts[scenario] < required_count:
+            reasons.append(f"SCENARIO_CASE_MISSING:{scenario}")
+    tws_versions = sorted({str(item.get("tws_server_version")) for item in manifests})
+    ibapi_versions = sorted({str(item.get("ibapi_version")) for item in manifests})
+    if len(tws_versions) > 1:
+        reasons.append("MIXED_TWS_VERSION_WITHOUT_COMPATIBILITY_CASE")
+    if len(ibapi_versions) > 1:
+        reasons.append("MIXED_IBAPI_VERSION_WITHOUT_COMPATIBILITY_CASE")
+    per_state_stability = {
+        scenario: {
+            "required_sessions": required_count,
+            "observed_sessions": coverage_counts[scenario],
+            "scenario_case_passed": valid_case_counts[scenario] > 0,
+        }
+        for scenario, required_count in coverage_requirements.items()
+    }
+    expected_transitions = {
+        item.scenario_type.value: item.expected_transition for item in valid_cases
+    }
+    observed_transitions = {
+        item.scenario_type.value: item.observed_transition for item in valid_cases
+    }
+    unexplained_divergences = sum(1 for item in scenario_cases if item.decision != "PASS")
     manifest_hashes = [
         sha256_file(path / "manifest.json") for path in paths if (path / "manifest.json").is_file()
     ]
@@ -337,11 +407,17 @@ def evaluate_burn_in_corpus(
         "schema_version": "ibkr-burn-in-corpus-v1",
         "decision": "PASS" if not reasons else "BLOCKED",
         "bindings": bindings,
+        "raw_scope_hashes": raw_scope_hashes,
         "sessions_total": len(manifests),
+        "scope_child_sessions": len(scope_manifests),
+        "cross_scope_child_sessions": len(cross_scope_manifests),
         "sessions_complete": sum(1 for item in manifests if item.get("complete")),
         "sessions_eligible": len(eligible),
         "minimum_sessions": threshold,
-        "consecutive_stable": consecutive_stable,
+        "minimum_total_sessions": policy.minimum_unique_sessions,
+        "minimum_cross_scope_sessions": policy.minimum_cross_scope_sessions,
+        "maximum_same_state_consensus": maximum_consensus_count,
+        "per_state_stability": per_state_stability,
         "divergent_resets": divergent_resets,
         "fact_drops": fact_drops,
         "writer_errors": writer_errors,
@@ -349,8 +425,14 @@ def evaluate_burn_in_corpus(
         "capture_scenarios": sorted({str(item.get("capture_scenario")) for item in manifests}),
         "coverage_requirements": coverage_requirements,
         "coverage_counts": coverage_counts,
-        "tws_versions": sorted({str(item.get("tws_server_version")) for item in manifests}),
-        "ibapi_versions": sorted({str(item.get("ibapi_version")) for item in manifests}),
+        "scenario_case_requirements": case_coverage_requirements,
+        "scenario_case_counts": dict(sorted(valid_case_counts.items())),
+        "scenario_case_artifact_ids": sorted(item.artifact_id for item in valid_cases),
+        "expected_transitions": expected_transitions,
+        "observed_transitions": observed_transitions,
+        "unexplained_divergences": unexplained_divergences,
+        "tws_versions": tws_versions,
+        "ibapi_versions": ibapi_versions,
         "first_observed_at": min((str(item.get("started_at")) for item in manifests), default=None),
         "last_observed_at": max(
             (str(item.get("completed_at")) for item in manifests), default=None
@@ -363,6 +445,39 @@ def evaluate_burn_in_corpus(
         reasons=tuple(body["reasons"]),
         corpus={"corpus_id": canonical_hash(body), **body},
     )
+
+
+def _scope_compatibility_hash(manifest: dict[str, Any]) -> str:
+    """Normalize legacy/new visibility fields without mutating old evidence."""
+
+    policy = manifest.get("scope_policy")
+    if not isinstance(policy, dict):
+        return str(manifest.get("scope_hash"))
+    open_order_query = str(policy.get("open_order_query", "UNDECLARED"))
+    body = {
+        "configured_account_hash": policy.get("configured_account_hash"),
+        "client_id": policy.get("client_id"),
+        "master_client": policy.get("master_client"),
+        "current_all_open_orders_snapshot_requested": policy.get(
+            "current_all_open_orders_snapshot_requested",
+            open_order_query in {"ALL_OPEN_ORDERS", "reqAllOpenOrders"},
+        ),
+        "future_manual_order_updates_bound": policy.get(
+            "future_manual_order_updates_bound",
+            policy.get("manual_tws_orders_visible", False),
+        ),
+        "future_other_api_order_updates_visible": policy.get(
+            "future_other_api_order_updates_visible",
+            policy.get("other_api_clients_visible", False),
+        ),
+        "execution_query_scope": policy.get("execution_query_scope"),
+        "open_order_query": open_order_query,
+        "completed_orders_requested": policy.get("completed_orders_requested"),
+        "completed_orders_api_only": policy.get("completed_orders_api_only"),
+        "completed_order_date_scope": policy.get("completed_order_date_scope"),
+        "base_currency": policy.get("base_currency"),
+    }
+    return canonical_hash(body)
 
 
 def _build_manifest(
@@ -459,6 +574,11 @@ def _build_manifest(
         "writer_error": certificate.writer_error,
         "final_watermark": certificate.final_watermark,
         "semantic_hash": certificate.semantic_hash,
+        "orders_hash": certificate.orders_hash,
+        "positions_hash": certificate.positions_hash,
+        "executions_hash": certificate.executions_hash,
+        "commissions_hash": certificate.commissions_hash,
+        "protection_hash": certificate.protection_hash,
         "valuation_fields": certificate.valuation_fields,
         "reconciliation_result": reconciliation_status,
         "complete": certificate.complete,

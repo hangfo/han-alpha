@@ -89,6 +89,12 @@ Record important decisions here with date, alternatives, and consequences. Do no
   zero drops and converged reconciliation. Scenario-state validation now prevents
   label-only coverage. E1-B remains blocked at genuine static-position/order and
   restart/recovery/nightly/client-switch evidence; no Broker write occurred.
+- 2026-07-27: Issue #5 local hardening replaced label-only restart/recovery
+  counting with typed Scenario Cases, reconciled the API 22+2 and ALL 9+1
+  Session topology, isolated client switching across Scope hashes, converted the
+  Observer to a positive request allowlist, split order snapshot/binding
+  visibility, and added an isolated one-shot bounded Paper fixture. No fixture
+  Broker write occurred; E1/E2 gates remain unchanged.
 
 ## Verification log
 

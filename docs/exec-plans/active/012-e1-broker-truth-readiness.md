@@ -1,6 +1,6 @@
 # E1 execution plan: Broker Truth Readiness
 
-Status: E1-A COMPLETE; E1-B AUTHENTICATED EMPTY-ACCOUNT SLICE VERIFIED, MATRIX BLOCKED
+Status: E1-A COMPLETE; ISSUE #5 LOCAL HARDENING VERIFIED; REAL MATRIX BLOCKED
 Owner: Codex and operator
 Started: 2026-07-26
 
@@ -29,9 +29,10 @@ capability.
   Scope-specific session and scenario matrix passes.
 - Runtime holds Ed25519 public keys only; Risk and Execution reviewer receipts
   must be independent and bind the exact Safety Case.
-- The Observer uses a dedicated client that rejects `placeOrder`, `cancelOrder`,
-  `reqGlobalCancel` and `exerciseOptions`, even if TWS Read-Only must be disabled
-  for the separately attested ALL-Scope order-visibility phase.
+- The Observer uses an audited positive allowlist containing only the nine
+  read/cancel-subscription request families it needs (including matching
+  protobuf encoders). Every other current or future
+  Broker-operation-shaped `EClient` method is unreachable by default.
 - Preflight and Session Manifests register automatically. Golden Tape evaluation
   executes metamorphic callback transforms and emits a machine-readable Callback
   Truth Map plus a content-addressed corpus.
@@ -57,6 +58,22 @@ capability.
   Preflight and complete callback observation with Client ID 41.
 - Five API-Scope `empty_account` sessions are eligible, zero-drop and reconciled.
   Scenario-state gates now reject empty/static-position/order label mismatches.
+- Typed Scenario Cases now require real child Session IDs and event receipts for
+  process/TWS/network/nightly/client-switch evidence. The single acceptance
+  policy fixes API topology at 22 same-Scope plus two cross-Scope Sessions (24
+  total), and ALL at 9+1 (10 total).
+- Client 41 point-in-time all-open-orders snapshots are distinct from future
+  Client-0 manual-order binding. Raw callback facts retain evidence-based order
+  origin rather than treating a scenario label as provenance.
+- An isolated bounded Paper fixture exists for minimal E1 facts. It is not
+  imported by runtime, refuses live ports/ambiguous accounts/excess size and
+  consumes a one-shot Permit before a Broker write. No real fixture write has
+  yet been attempted.
+- The hardened positive allowlist passed a fresh authenticated zero-write
+  observation with Client 419: complete Scope, 31 accepted/written facts, no
+  position/order and no future manual-order binding claim. A normalized
+  compatibility Scope hash preserves the five immutable legacy Client 41
+  Sessions while retaining their original raw Scope hashes.
 
 ## External sequence
 
@@ -75,7 +92,7 @@ capability.
    cancel and Bracket tapes.
 8. Replay callback permutation/duplication/delay cases deterministically.
 
-Steps 1-4 and the API `empty_account 5/5` slice are complete. The runner now
+Steps 1-4, the API `empty_account 5/5` slice and Issue #5 local contracts are complete. The runner now
 stops at `static_position 0/5`; the operator must create a genuine bounded Paper
 position before another capture. API/ALL order, process/TWS restart, network
 recovery, nightly reset and client-switch windows remain `BLOCKED_HUMAN_ACTION`.

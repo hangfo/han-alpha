@@ -1,6 +1,6 @@
 # Known limitations
 
-Updated: 2026-07-27 after the first authenticated IBKR Paper capture.
+Updated: 2026-07-27 after Issue #5 E1 matrix hardening.
 
 1. Synthetic data is only for engineering validation. Synthetic returns are not investment evidence.
 2. M1 proves PIT contracts only on repository-owned synthetic fixtures. It does not validate any real vendor's timestamps, symbology, revisions, corporate actions, licensing, retention or outage behavior.
@@ -15,7 +15,7 @@ Updated: 2026-07-27 after the first authenticated IBKR Paper capture.
    reconciliation failures. Static positions, API/manual orders, commissions,
    process/TWS/network/nightly recovery, client-ID switching, ALL Scope and the
    complete Golden Tape matrix remain externally BLOCKED.
-8. Safety Case verification now requires resolvable artifacts and independent Ed25519 Risk/Execution receipts. No online issuance path or Canary Permit exists; existing Outbox commands cannot be treated as authorized real IBKR writes.
+8. Safety Case verification requires resolvable artifacts and independent Ed25519 Risk/Execution receipts. The isolated E1 fixture has its own one-shot scenario Permit, but this is deliberately not an E2 Canary Permit and gives no authority to the runtime or existing Outbox.
 9. Generation Restore is atomic across restored files, but sequential online backups are not a distributed transaction. `content_set_hash` identifies equal database bytes; `generation_id` remains manifest/time addressed. Quiesce writers for a strict cross-store PIT backup.
 10. The M0 operator token protects default-local mutation routes but is not remote deployment authentication. Read routes remain unauthenticated; TLS, CSRF, actor identity, rotation, rate limits and network policy remain deployment work.
 11. Broker capability is an application boundary, not protection against compromise of the host or the authorized process. Python objects are opaque conventions, not an OS security boundary.
@@ -38,3 +38,11 @@ Updated: 2026-07-27 after the first authenticated IBKR Paper capture.
     provenance or approve licenses/login/2FA on the user's behalf.
 24. External Acceptance counts are operational evidence summaries, not strategy
     profitability, safety certification or authorization to trade.
+25. Issue #5 closes label-only restart evidence, mixed-Scope client-switch
+    arithmetic, Observer denylist drift and snapshot/binding ambiguity locally.
+    Genuine static/API/manual order, restart, network/nightly and client-switch
+    callback evidence is still absent.
+26. The E1 Paper fixture is hard-limited to Paper ports, a reserved client range,
+    one whole STK share and USD 1,000 notional. It has not yet sent a Broker write,
+    cannot automate TWS GUI manual orders, and must not be represented as strategy
+    execution or profitability evidence.

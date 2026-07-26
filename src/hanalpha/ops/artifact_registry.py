@@ -115,6 +115,10 @@ class ArtifactRegistry:
             in {
                 ArtifactType.BURN_IN_CORPUS,
                 ArtifactType.BURN_IN_SESSION,
+                ArtifactType.E1_SCENARIO_CASE,
+                ArtifactType.E1_EVENT_RECEIPT,
+                ArtifactType.E1_FIXTURE_PERMIT,
+                ArtifactType.E1_FIXTURE_RECEIPT,
                 ArtifactType.GOLDEN_TAPE,
                 ArtifactType.RAW_SAMPLE_MANIFEST,
             }
@@ -301,18 +305,25 @@ class ArtifactRegistry:
     def external_acceptance_summary(self) -> dict[str, Any]:
         """Project E1/R1 progress only from currently resolvable Registry evidence."""
 
-        from hanalpha.execution.burn_in import ALL_SCOPE_COVERAGE, API_SCOPE_COVERAGE
+        from hanalpha.execution.e1_scenarios import (
+            E1_ACCEPTANCE_POLICIES,
+            E1ScopeName,
+        )
 
         scope_requirements = {
-            "api": API_SCOPE_COVERAGE,
-            "all": ALL_SCOPE_COVERAGE,
+            scope.value: E1_ACCEPTANCE_POLICIES[scope].session_requirements for scope in E1ScopeName
         }
         scope_counts: dict[str, dict[str, int]] = {"api": {}, "all": {}}
+        case_counts: dict[str, dict[str, int]] = {"api": {}, "all": {}}
         source_samples = {"sec_edgar": 0, "fred_alfred": 0, "massive": 0}
         rows = self.connection.execute(
             """SELECT artifact_id, artifact_type FROM evidence_artifacts
-               WHERE status='VERIFIED' AND artifact_type IN (?, ?)""",
-            (ArtifactType.BURN_IN_SESSION.value, ArtifactType.RAW_SAMPLE_MANIFEST.value),
+               WHERE status='VERIFIED' AND artifact_type IN (?, ?, ?)""",
+            (
+                ArtifactType.BURN_IN_SESSION.value,
+                ArtifactType.E1_SCENARIO_CASE.value,
+                ArtifactType.RAW_SAMPLE_MANIFEST.value,
+            ),
         ).fetchall()
         for row in rows:
             artifact_type = ArtifactType(str(row["artifact_type"]))
@@ -325,31 +336,54 @@ class ArtifactRegistry:
                 scenario = str(document.get("capture_scenario", ""))
                 if scenario in scope_requirements[scope]:
                     scope_counts[scope][scenario] = scope_counts[scope].get(scenario, 0) + 1
+            elif artifact_type is ArtifactType.E1_SCENARIO_CASE:
+                scope = str(document.get("scope", ""))
+                scenario = str(document.get("scenario_type", ""))
+                if (
+                    scope in case_counts
+                    and scenario
+                    in E1_ACCEPTANCE_POLICIES[E1ScopeName(scope)].scenario_case_requirements
+                ):
+                    case_counts[scope][scenario] = case_counts[scope].get(scenario, 0) + 1
             else:
                 source = str(document.get("source_id", ""))
                 if source in source_samples:
                     source_samples[source] += 1
         e1 = {}
         for scope, requirements in scope_requirements.items():
+            case_requirements = E1_ACCEPTANCE_POLICIES[
+                E1ScopeName(scope)
+            ].scenario_case_requirements
             completed = sum(
                 min(scope_counts[scope].get(scenario, 0), required)
                 for scenario, required in requirements.items()
             )
             required_total = sum(requirements.values())
+            case_completed = sum(
+                min(case_counts[scope].get(scenario, 0), required)
+                for scenario, required in case_requirements.items()
+            )
+            case_required_total = sum(case_requirements.values())
             e1[scope] = {
                 "completed": completed,
                 "required": required_total,
-                "decision": "PASS" if completed == required_total else "BLOCKED",
+                "case_completed": case_completed,
+                "case_required": case_required_total,
+                "decision": (
+                    "PASS"
+                    if completed == required_total and case_completed == case_required_total
+                    else "BLOCKED"
+                ),
                 "counts": scope_counts[scope],
                 "requirements": requirements,
+                "case_counts": case_counts[scope],
+                "case_requirements": case_requirements,
             }
         r1 = {
             source: {
                 "sample_manifests": count,
                 "decision": (
-                    "TRANSPORT_VERIFIED_RIGHTS_PENDING"
-                    if count
-                    else "BLOCKED_HUMAN_ACTION"
+                    "TRANSPORT_VERIFIED_RIGHTS_PENDING" if count else "BLOCKED_HUMAN_ACTION"
                 ),
             }
             for source, count in source_samples.items()
@@ -371,6 +405,10 @@ def _schema_valid(document: dict[str, Any], artifact_type: ArtifactType) -> bool
         ArtifactType.BURN_IN_CORPUS: "ibkr-burn-in-corpus-",
         ArtifactType.IBKR_PREFLIGHT: "ibkr-zero-write-preflight-",
         ArtifactType.GOLDEN_TAPE: "ibkr-golden-tape-",
+        ArtifactType.E1_SCENARIO_CASE: "e1-scenario-case-",
+        ArtifactType.E1_EVENT_RECEIPT: "e1-event-receipt-",
+        ArtifactType.E1_FIXTURE_PERMIT: "e1-fixture-permit-",
+        ArtifactType.E1_FIXTURE_RECEIPT: "e1-fixture-receipt-",
     }
     prefix = expected_prefixes.get(artifact_type)
     if prefix and not schema.startswith(prefix):
@@ -407,6 +445,14 @@ def _policy_passed(document: dict[str, Any], artifact_type: ArtifactType) -> boo
             and isinstance(document.get("responses"), list)
             and bool(document["responses"])
         )
+    if artifact_type is ArtifactType.E1_SCENARIO_CASE:
+        return document.get("decision") == "PASS"
+    if artifact_type is ArtifactType.E1_EVENT_RECEIPT:
+        return document.get("secrets_redacted") is True
+    if artifact_type is ArtifactType.E1_FIXTURE_PERMIT:
+        return document.get("one_shot") is True and document.get("operator_attested_paper") is True
+    if artifact_type is ArtifactType.E1_FIXTURE_RECEIPT:
+        return document.get("decision") == "BROKER_ACKNOWLEDGED"
     return document.get("decision") in {"PASS", "APPROVE", "APPROVED", "VERIFIED"}
 
 

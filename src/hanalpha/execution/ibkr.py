@@ -279,12 +279,22 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
     def _order_payload(
         order_id: int, contract: Contract, order: Order, order_state: Any
     ) -> dict[str, Any]:
+        client_id = int(getattr(order, "clientId", 0))
+        order_ref = str(getattr(order, "orderRef", ""))
+        origin_evidence = (
+            "HAN_ALPHA_ORDER_REF"
+            if order_ref.startswith(("HA:", "E1FIX:"))
+            else "CLIENT_ZERO_CALLBACK"
+            if client_id == 0
+            else "UNCLASSIFIED_CALLBACK"
+        )
         return {
             "order_id": order_id,
             "perm_id": int(getattr(order, "permId", 0)),
             "parent_id": int(getattr(order, "parentId", 0)),
-            "client_id": int(getattr(order, "clientId", 0)),
-            "order_ref": str(getattr(order, "orderRef", "")),
+            "client_id": client_id,
+            "order_ref": order_ref,
+            "origin_evidence": origin_evidence,
             "symbol": str(contract.symbol),
             "con_id": int(getattr(contract, "conId", 0)),
             "security_type": str(getattr(contract, "secType", "")),
@@ -349,10 +359,76 @@ class _IBApp(EWrapper, EClient):  # type: ignore[misc]
 
 
 class _ObserverOnlyIBApp(_IBApp):
-    """IBKR callback client whose order-mutating methods are structurally disabled."""
+    """IBKR callback client with a positive allowlist of outbound observations."""
+
+    OBSERVER_ECLIENT_ALLOWLIST = frozenset(
+        {
+            "cancelAccountSummary",
+            "cancelAccountSummaryProtoBuf",
+            "cancelPositions",
+            "cancelPositionsProtoBuf",
+            "reqAccountSummary",
+            "reqAccountSummaryProtoBuf",
+            "reqAllOpenOrders",
+            "reqAllOpenOrdersProtoBuf",
+            "reqCompletedOrders",
+            "reqCompletedOrdersProtoBuf",
+            "reqCurrentTime",
+            "reqCurrentTimeProtoBuf",
+            "reqExecutions",
+            "reqExecutionsProtoBuf",
+            "reqManagedAccts",
+            "reqManagedAcctsProtoBuf",
+            "reqPositions",
+            "reqPositionsProtoBuf",
+        }
+    )
+    _TRANSPORT_ECLIENT_ALLOWLIST = frozenset(
+        {
+            "checkConnected",
+            "connect",
+            "disconnect",
+            "isConnected",
+            "keyboardInterrupt",
+            "keyboardInterruptHard",
+            "logRequest",
+            "msgLoopRec",
+            "msgLoopTmo",
+            "reset",
+            "run",
+            "sendMsg",
+            "sendMsgProtoBuf",
+            "serverVersion",
+            "setConnState",
+            "setConnectOptions",
+            "startApi",
+            "startApiProtoBuf",
+            "twsConnectionTime",
+            "useProtoBuf",
+            "validateAttachedOrdersParameters",
+            "validateInvalidSymbols",
+            "validateOrderParameters",
+            "verifyAndAuthMessage",
+            "verifyAndAuthRequest",
+            "verifyMessage",
+            "verifyMessageProtoBuf",
+            "verifyRequest",
+            "verifyRequestProtoBuf",
+        }
+    )
+
+    def __getattribute__(self, name: str) -> Any:
+        if (
+            not name.startswith("_")
+            and callable(getattr(EClient, name, None))
+            and name not in type(self).OBSERVER_ECLIENT_ALLOWLIST
+            and name not in type(self)._TRANSPORT_ECLIENT_ALLOWLIST
+        ):
+            return object.__getattribute__(self, "_writes_forbidden")
+        return super().__getattribute__(name)
 
     @staticmethod
-    def _writes_forbidden() -> None:
+    def _writes_forbidden(*_args: Any, **_kwargs: Any) -> None:
         raise PermissionError("observer-only IBKR client cannot call a broker write method")
 
     def placeOrder(self, *args: Any, **kwargs: Any) -> None:

@@ -685,3 +685,32 @@ NOT IMPLEMENTED in M5: durable IBKR cancel/flatten commands (the current
 authenticated emergency path is risk-reducing only), Dashboard (M7), and Live
 Proposal independent review (M8). No profitability or production-readiness claim
 is made.
+
+## Issue #5 E1 real-matrix hardening - 2026-07-27
+
+Implemented locally:
+
+- immutable event receipts and typed Scenario Cases for static/order,
+  process/TWS/network/nightly recovery and cross-Scope client switching;
+- one authoritative API/ALL Session topology with distinct same-Scope and
+  cross-Scope thresholds, per-state stability and expected transitions;
+- audited positive Observer request allowlist across the installed official
+  `EClient` surface;
+- separate point-in-time all-open-orders visibility, future manual binding and
+  other-client update claims;
+- raw callback order-origin evidence and label-swap rejection;
+- an isolated Paper-only, one-share/USD 1,000, reserved-client, one-shot fixture
+  with exact account binding and immutable pre/post receipts.
+
+VERIFIED locally: `preflight.sh` and `verify_all.sh`; strict mypy over 116
+source files; 297 passing Python tests plus one skipped; 85.03% branch-aware
+coverage; package, CLI/API/research smoke, dependency audit and frontend
+lint/type/test/build. VERIFIED externally remains limited to the
+existing five unmodified empty-account Sessions plus a post-hardening,
+zero-write Client 419 observation (`complete=true`, 31/31 facts,
+`scope_complete=true`, no positions/orders, future manual binding false).
+The compatibility Scope hash keeps legacy Client 41 Sessions usable without
+modifying their evidence. BLOCKED: the first fixture
+write until TWS API Read-Only is explicitly disabled, all genuine
+static/API/manual order Cases, TWS/network/nightly cases, R1 credentials/rights
+and E2/E3. No Broker write was sent in this change and no Alpha claim is made.
