@@ -95,6 +95,15 @@ Record important decisions here with date, alternatives, and consequences. Do no
   Observer to a positive request allowlist, split order snapshot/binding
   visibility, and added an isolated one-shot bounded Paper fixture. No fixture
   Broker write occurred; E1/E2 gates remain unchanged.
+- 2026-07-29: Issue #6 closed the final local pre-write truth gaps. Scenario
+  Case v2 and acceptance allocation prevent evidence/session/receipt reuse and
+  require corpus membership. This proved the old API 24 / ALL 10 topology
+  impossible under disjoint two-Session Cases; Policy v3 is API 30+4=34 and
+  ALL 14+2=16. Observer raw sends are thread-locally internal, fixture permits
+  require real-time RTH Quote/Contract Capsules, outcomes are phase-specific,
+  and lifecycle cleanup must return to baseline. A real Observer run passed
+  33/33 facts with zero drops, while SPY quote capture was blocked on real-time
+  market-data entitlement. No Permit or Broker write was created.
 
 ## Verification log
 
@@ -133,3 +142,6 @@ Issue #3 decisions and the post-qualification sequence are recorded in
 `../../v2-plan/20_E1B_R1B_ISSUE3_REVIEW_AND_ONBOARDING_ZH.md`.
 Issue #4 decisions and the beginner-safe real setup sequence are recorded in
 `../../v2-plan/21_E1B_R1B_ISSUE4_REVIEW_AND_OPERATOR_GUIDE_ZH.md`.
+Issue #5/#6 evidence-matrix and pre-write decisions are recorded in
+`../../v2-plan/22_ISSUE5_REVIEW_AND_E1_MATRIX_HARDENING_ZH.md` and
+`../../v2-plan/23_ISSUE6_PREWRITE_REVIEW_AND_REALITY_GATE_ZH.md`.

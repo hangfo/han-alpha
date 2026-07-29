@@ -34,9 +34,34 @@ def test_observer_only_app_structurally_rejects_broker_writes() -> None:
         lambda: app.cancelOrder(1),
         app.reqGlobalCancel,
         lambda: app.exerciseOptions(1, object(), 1, 1, "DU", 0),
+        lambda: app.sendMsg(b"raw"),
+        lambda: app.sendMsgProtoBuf(object()),
+        app.reqOpenOrders,
+        lambda: app.reqAutoOpenOrders(True),
+        lambda: app.replaceFA(1, "<xml/>"),
     ):
         with pytest.raises(PermissionError, match="observer-only"):
             call()
+
+
+def test_observer_raw_send_is_only_available_inside_declared_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent: list[bytes] = []
+
+    def fake_send(_self, payload: bytes) -> None:
+        sent.append(payload)
+
+    def fake_read(self) -> None:
+        self.sendMsg(b"declared-read")
+
+    monkeypatch.setattr(ibkr_module.EClient, "sendMsg", fake_send)
+    monkeypatch.setattr(ibkr_module.EClient, "reqCurrentTime", fake_read)
+    app = _ObserverOnlyIBApp()
+    app.reqCurrentTime()
+    assert sent == [b"declared-read"]
+    with pytest.raises(PermissionError, match="observer-only"):
+        app.sendMsg(b"raw-caller")
 
 
 def test_ibapp_callbacks_normalize_redact_and_preserve_order_state(tmp_path) -> None:

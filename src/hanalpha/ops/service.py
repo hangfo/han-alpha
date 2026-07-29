@@ -45,6 +45,28 @@ class OpsService:
             return None
         return (now - datetime.fromisoformat(value)).total_seconds()
 
+    @staticmethod
+    def _empty_external_acceptance() -> dict[str, Any]:
+        from hanalpha.execution.e1_scenarios import E1_ACCEPTANCE_POLICIES
+
+        return {
+            "e1": {
+                scope.value: {
+                    "completed": 0,
+                    "required": policy.minimum_unique_sessions,
+                    "decision": "BLOCKED",
+                }
+                for scope, policy in E1_ACCEPTANCE_POLICIES.items()
+            },
+            "r1": {
+                source: {
+                    "sample_manifests": 0,
+                    "decision": "BLOCKED_HUMAN_ACTION",
+                }
+                for source in ("sec_edgar", "fred_alfred", "massive")
+            },
+        }
+
     def overview(
         self,
         *,
@@ -220,19 +242,7 @@ class OpsService:
         external_acceptance = (
             self.artifact_registry.external_acceptance_summary()
             if self.artifact_registry
-            else {
-                "e1": {
-                    "api": {"completed": 0, "required": 24, "decision": "BLOCKED"},
-                    "all": {"completed": 0, "required": 10, "decision": "BLOCKED"},
-                },
-                "r1": {
-                    source: {
-                        "sample_manifests": 0,
-                        "decision": "BLOCKED_HUMAN_ACTION",
-                    }
-                    for source in ("sec_edgar", "fred_alfred", "massive")
-                },
-            }
+            else self._empty_external_acceptance()
         )
         burn_in_corpus = (
             self.artifact_registry.latest_verified_document(ArtifactType.BURN_IN_CORPUS)

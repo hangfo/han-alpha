@@ -307,21 +307,39 @@ class ArtifactRegistry:
 
         from hanalpha.execution.e1_scenarios import (
             E1_ACCEPTANCE_POLICIES,
+            E1ScenarioCase,
             E1ScopeName,
+            allocate_scenario_cases,
         )
 
         scope_requirements = {
             scope.value: E1_ACCEPTANCE_POLICIES[scope].session_requirements for scope in E1ScopeName
         }
         scope_counts: dict[str, dict[str, int]] = {"api": {}, "all": {}}
-        case_counts: dict[str, dict[str, int]] = {"api": {}, "all": {}}
+        scope_manifest_ids: dict[str, set[str]] = {"api": set(), "all": set()}
+        cross_scope_manifest_ids: dict[str, set[str]] = {"api": set(), "all": set()}
+        cases_by_scope: dict[str, list[E1ScenarioCase]] = {"api": [], "all": []}
+        session_bindings: dict[str, dict[str, set[str]]] = {
+            scope: {
+                field: set()
+                for field in (
+                    "account_identity_hash",
+                    "git_commit",
+                    "config_hash",
+                    "normalization_policy_hash",
+                )
+            }
+            for scope in ("api", "all")
+        }
+        available_receipt_ids: set[str] = set()
         source_samples = {"sec_edgar": 0, "fred_alfred": 0, "massive": 0}
         rows = self.connection.execute(
             """SELECT artifact_id, artifact_type FROM evidence_artifacts
-               WHERE status='VERIFIED' AND artifact_type IN (?, ?, ?)""",
+               WHERE status='VERIFIED' AND artifact_type IN (?, ?, ?, ?)""",
             (
                 ArtifactType.BURN_IN_SESSION.value,
                 ArtifactType.E1_SCENARIO_CASE.value,
+                ArtifactType.E1_EVENT_RECEIPT.value,
                 ArtifactType.RAW_SAMPLE_MANIFEST.value,
             ),
         ).fetchall()
@@ -332,20 +350,35 @@ class ArtifactRegistry:
                 continue
             document = _read_json(Path(resolution.path))
             if artifact_type is ArtifactType.BURN_IN_SESSION:
-                scope = "api" if document.get("completed_orders_api_only") is True else "all"
+                declared_scope = document.get("completed_orders_scope")
+                scope = (
+                    str(declared_scope)
+                    if declared_scope in {"api", "all"}
+                    else "api"
+                    if document.get("completed_orders_api_only") is True
+                    else "all"
+                )
                 scenario = str(document.get("capture_scenario", ""))
                 if scenario in scope_requirements[scope]:
                     scope_counts[scope][scenario] = scope_counts[scope].get(scenario, 0) + 1
+                    target = (
+                        cross_scope_manifest_ids
+                        if scenario == "client_id_switch"
+                        else scope_manifest_ids
+                    )
+                    target[scope].add(str(document.get("manifest_id")))
+                    for field in session_bindings[scope]:
+                        session_bindings[scope][field].add(str(document.get(field)))
             elif artifact_type is ArtifactType.E1_SCENARIO_CASE:
                 scope = str(document.get("scope", ""))
-                scenario = str(document.get("scenario_type", ""))
-                if (
-                    scope in case_counts
-                    and scenario
-                    in E1_ACCEPTANCE_POLICIES[E1ScopeName(scope)].scenario_case_requirements
-                ):
-                    case_counts[scope][scenario] = case_counts[scope].get(scenario, 0) + 1
-            else:
+                if scope in cases_by_scope:
+                    try:
+                        cases_by_scope[scope].append(E1ScenarioCase.model_validate(document))
+                    except ValueError:
+                        continue
+            elif artifact_type is ArtifactType.E1_EVENT_RECEIPT:
+                available_receipt_ids.add(str(document.get("artifact_id")))
+            elif artifact_type is ArtifactType.RAW_SAMPLE_MANIFEST:
                 source = str(document.get("source_id", ""))
                 if source in source_samples:
                     source_samples[source] += 1
@@ -354,13 +387,35 @@ class ArtifactRegistry:
             case_requirements = E1_ACCEPTANCE_POLICIES[
                 E1ScopeName(scope)
             ].scenario_case_requirements
+            binding_eligible_cases = [
+                case
+                for case in cases_by_scope[scope]
+                if all(
+                    values == {str(getattr(case, field))}
+                    for field, values in session_bindings[scope].items()
+                )
+            ]
+            binding_rejections = {
+                case.artifact_id: ("CASE_BINDING_MISMATCH",)
+                for case in cases_by_scope[scope]
+                if case not in binding_eligible_cases
+            }
+            allocated_case_counts, allocation_rejections = allocate_scenario_cases(
+                binding_eligible_cases,
+                scope=E1ScopeName(scope),
+                at=datetime.now(UTC),
+                corpus_manifest_ids=scope_manifest_ids[scope],
+                cross_scope_manifest_ids=cross_scope_manifest_ids[scope],
+                available_receipt_ids=available_receipt_ids,
+            )
+            allocation_rejections = {**binding_rejections, **allocation_rejections}
             completed = sum(
                 min(scope_counts[scope].get(scenario, 0), required)
                 for scenario, required in requirements.items()
             )
             required_total = sum(requirements.values())
             case_completed = sum(
-                min(case_counts[scope].get(scenario, 0), required)
+                min(allocated_case_counts.get(scenario, 0), required)
                 for scenario, required in case_requirements.items()
             )
             case_required_total = sum(case_requirements.values())
@@ -376,8 +431,12 @@ class ArtifactRegistry:
                 ),
                 "counts": scope_counts[scope],
                 "requirements": requirements,
-                "case_counts": case_counts[scope],
+                "case_counts": dict(sorted(allocated_case_counts.items())),
                 "case_requirements": case_requirements,
+                "case_allocation_rejections": {
+                    case_id: list(reasons)
+                    for case_id, reasons in sorted(allocation_rejections.items())
+                },
             }
         r1 = {
             source: {
@@ -409,6 +468,8 @@ def _schema_valid(document: dict[str, Any], artifact_type: ArtifactType) -> bool
         ArtifactType.E1_EVENT_RECEIPT: "e1-event-receipt-",
         ArtifactType.E1_FIXTURE_PERMIT: "e1-fixture-permit-",
         ArtifactType.E1_FIXTURE_RECEIPT: "e1-fixture-receipt-",
+        ArtifactType.E1_QUOTE_CAPSULE: "e1-quote-capsule-",
+        ArtifactType.E1_CLEANUP_RECEIPT: "e1-cleanup-receipt-",
     }
     prefix = expected_prefixes.get(artifact_type)
     if prefix and not schema.startswith(prefix):
@@ -452,7 +513,19 @@ def _policy_passed(document: dict[str, Any], artifact_type: ArtifactType) -> boo
     if artifact_type is ArtifactType.E1_FIXTURE_PERMIT:
         return document.get("one_shot") is True and document.get("operator_attested_paper") is True
     if artifact_type is ArtifactType.E1_FIXTURE_RECEIPT:
-        return document.get("decision") == "BROKER_ACKNOWLEDGED"
+        return document.get("decision") in {
+            "BROKER_ACCEPTED_OPEN",
+            "BROKER_FILLED",
+            "BROKER_CANCELLED",
+        }
+    if artifact_type is ArtifactType.E1_QUOTE_CAPSULE:
+        return (
+            document.get("decision") == "PASS"
+            and document.get("market_data_type") == "REALTIME"
+            and document.get("market_phase") == "REGULAR"
+        )
+    if artifact_type is ArtifactType.E1_CLEANUP_RECEIPT:
+        return document.get("decision") == "CLEAN"
     return document.get("decision") in {"PASS", "APPROVE", "APPROVED", "VERIFIED"}
 
 

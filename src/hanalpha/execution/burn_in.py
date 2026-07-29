@@ -256,9 +256,10 @@ def evaluate_burn_in_corpus(
 ) -> BurnInCorpusEvaluation:
     from hanalpha.execution.e1_scenarios import (
         E1_ACCEPTANCE_POLICIES,
+        E1EventReceipt,
         E1ScopeName,
+        allocate_scenario_cases,
         load_scenario_cases,
-        scenario_case_counts,
     )
 
     paths = tuple(sorted(session_dirs))
@@ -349,8 +350,9 @@ def evaluate_burn_in_corpus(
     for scenario, required_count in coverage_requirements.items():
         if coverage_counts[scenario] < required_count:
             reasons.append(f"COVERAGE_MISSING:{scenario}")
+    case_paths = tuple(sorted(scenario_case_paths))
     try:
-        scenario_cases = load_scenario_cases(scenario_case_paths)
+        scenario_cases = load_scenario_cases(case_paths)
     except (OSError, ValueError):
         scenario_cases = ()
         reasons.append("SCENARIO_CASE_INVALID")
@@ -374,11 +376,35 @@ def evaluate_burn_in_corpus(
             reasons.append(f"SCENARIO_CASE_BINDING_MISMATCH:{case.artifact_id}")
             continue
         valid_cases.append(case)
-    valid_case_counts = scenario_case_counts(
+    available_receipt_ids: set[str] = set()
+    for receipt_path in {
+        path.parent.parent / "receipts" / f"{receipt_id}.json"
+        for path in case_paths
+        for case in valid_cases
+        for receipt_id in case.event_receipt_ids
+    }:
+        try:
+            receipt = E1EventReceipt.model_validate_json(
+                receipt_path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            continue
+        available_receipt_ids.add(receipt.artifact_id)
+    valid_case_counts, rejected_case_allocations = allocate_scenario_cases(
         valid_cases,
         scope=scope,
         at=datetime.now(UTC),
+        corpus_manifest_ids=(
+            str(item.get("manifest_id")) for item in scope_manifests
+        ),
+        cross_scope_manifest_ids=(
+            str(item.get("manifest_id")) for item in cross_scope_manifests
+        ),
+        available_receipt_ids=available_receipt_ids,
     )
+    for case_id, allocation_reasons in rejected_case_allocations.items():
+        for allocation_reason in allocation_reasons:
+            reasons.append(f"SCENARIO_CASE_ALLOCATION:{case_id}:{allocation_reason}")
     for scenario, required_count in case_coverage_requirements.items():
         if valid_case_counts[scenario] < required_count:
             reasons.append(f"SCENARIO_CASE_MISSING:{scenario}")
@@ -431,6 +457,10 @@ def evaluate_burn_in_corpus(
         "scenario_case_requirements": case_coverage_requirements,
         "scenario_case_counts": dict(sorted(valid_case_counts.items())),
         "scenario_case_artifact_ids": sorted(item.artifact_id for item in valid_cases),
+        "scenario_case_allocation_rejections": {
+            case_id: list(case_reasons)
+            for case_id, case_reasons in sorted(rejected_case_allocations.items())
+        },
         "expected_transitions": expected_transitions,
         "observed_transitions": observed_transitions,
         "unexplained_divergences": unexplained_divergences,

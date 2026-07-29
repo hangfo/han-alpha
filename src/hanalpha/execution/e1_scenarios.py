@@ -73,7 +73,7 @@ class E1EventReceipt(BaseModel):
 class E1ScenarioCase(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: str = "e1-scenario-case-v1"
+    schema_version: str = "e1-scenario-case-v2"
     artifact_type: str = "E1_SCENARIO_CASE"
     artifact_id: str
     scenario_type: E1ScenarioType
@@ -84,6 +84,7 @@ class E1ScenarioCase(BaseModel):
     normalization_policy_hash: str = Field(min_length=64, max_length=64)
     child_session_manifest_ids: tuple[str, ...]
     event_receipt_ids: tuple[str, ...]
+    evidence_set_hash: str = Field(min_length=64, max_length=64)
     expected_transition: str
     observed_transition: str
     decision: str
@@ -110,6 +111,15 @@ class E1ScenarioCase(BaseModel):
             raise ValueError("scenario case requires child sessions")
         if len(set(self.child_session_manifest_ids)) != len(self.child_session_manifest_ids):
             raise ValueError("scenario case child sessions must be unique")
+        expected_evidence_set_hash = canonical_hash(
+            {
+                "scenario_type": self.scenario_type,
+                "child_session_manifest_ids": sorted(self.child_session_manifest_ids),
+                "event_receipt_ids": sorted(self.event_receipt_ids),
+            }
+        )
+        if self.evidence_set_hash != expected_evidence_set_hash:
+            raise ValueError("scenario case evidence-set hash mismatch")
         if not self.secrets_redacted:
             raise ValueError("scenario cases must be redacted")
         body = self.model_dump(mode="json", exclude={"artifact_id"})
@@ -121,7 +131,7 @@ class E1ScenarioCase(BaseModel):
 class E1AcceptancePolicy(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: str = "e1-acceptance-policy-v2"
+    schema_version: str = "e1-acceptance-policy-v3"
     scope: E1ScopeName
     minimum_unique_sessions: int = Field(ge=1)
     minimum_scope_sessions: int = Field(ge=1)
@@ -147,18 +157,18 @@ class E1AcceptancePolicy(BaseModel):
 E1_ACCEPTANCE_POLICIES: dict[E1ScopeName, E1AcceptancePolicy] = {
     E1ScopeName.API: E1AcceptancePolicy(
         scope=E1ScopeName.API,
-        minimum_unique_sessions=24,
-        minimum_scope_sessions=22,
-        minimum_cross_scope_sessions=2,
+        minimum_unique_sessions=34,
+        minimum_scope_sessions=30,
+        minimum_cross_scope_sessions=4,
         session_requirements={
             "empty_account": 5,
             "static_position": 5,
             "api_order": 4,
-            "process_restart": 3,
-            "tws_restart": 2,
-            "network_recovery": 2,
-            "nightly_reset": 1,
-            "client_id_switch": 2,
+            "process_restart": 6,
+            "tws_restart": 4,
+            "network_recovery": 4,
+            "nightly_reset": 2,
+            "client_id_switch": 4,
         },
         scenario_case_requirements={
             "static_position": 1,
@@ -172,15 +182,15 @@ E1_ACCEPTANCE_POLICIES: dict[E1ScopeName, E1AcceptancePolicy] = {
     ),
     E1ScopeName.ALL: E1AcceptancePolicy(
         scope=E1ScopeName.ALL,
-        minimum_unique_sessions=10,
-        minimum_scope_sessions=9,
-        minimum_cross_scope_sessions=1,
+        minimum_unique_sessions=16,
+        minimum_scope_sessions=14,
+        minimum_cross_scope_sessions=2,
         session_requirements={
             "manual_order": 4,
-            "process_restart": 2,
-            "tws_restart": 2,
-            "network_recovery": 1,
-            "client_id_switch": 1,
+            "process_restart": 4,
+            "tws_restart": 4,
+            "network_recovery": 2,
+            "client_id_switch": 2,
         },
         scenario_case_requirements={
             "manual_order": 1,
@@ -286,14 +296,84 @@ def scenario_case_counts(
     *,
     scope: E1ScopeName,
     at: datetime,
+    corpus_manifest_ids: Iterable[str] | None = None,
+    cross_scope_manifest_ids: Iterable[str] = (),
+    available_receipt_ids: Iterable[str] | None = None,
 ) -> Counter[str]:
-    return Counter(
-        item.scenario_type.value
-        for item in cases
-        if item.scope is scope
-        and item.decision == "PASS"
-        and item.effective_from <= at <= item.expires_at
-    )
+    return allocate_scenario_cases(
+        cases,
+        scope=scope,
+        at=at,
+        corpus_manifest_ids=corpus_manifest_ids,
+        cross_scope_manifest_ids=cross_scope_manifest_ids,
+        available_receipt_ids=available_receipt_ids,
+    )[0]
+
+
+def allocate_scenario_cases(
+    cases: Iterable[E1ScenarioCase],
+    *,
+    scope: E1ScopeName,
+    at: datetime,
+    corpus_manifest_ids: Iterable[str] | None,
+    cross_scope_manifest_ids: Iterable[str] = (),
+    available_receipt_ids: Iterable[str] | None = None,
+) -> tuple[Counter[str], dict[str, tuple[str, ...]]]:
+    """Allocate immutable case evidence once for one acceptance evaluation.
+
+    Child sessions and event receipts are exclusive by default. Client-switch is
+    the only cross-scope topology and must draw every child from the explicitly
+    supplied union of the current and named cross-scope corpora.
+    """
+
+    current = set(corpus_manifest_ids or ())
+    cross = set(cross_scope_manifest_ids)
+    available_receipts = set(available_receipt_ids or ())
+    enforce_membership = corpus_manifest_ids is not None
+    enforce_receipt_resolution = available_receipt_ids is not None
+    consumed_sessions: set[str] = set()
+    consumed_receipts: set[str] = set()
+    consumed_evidence_sets: set[str] = set()
+    counts: Counter[str] = Counter()
+    rejected: dict[str, tuple[str, ...]] = {}
+    for item in sorted(cases, key=lambda case: case.artifact_id):
+        reasons: list[str] = []
+        children = set(item.child_session_manifest_ids)
+        receipts = set(item.event_receipt_ids)
+        if item.scope is not scope:
+            reasons.append("CASE_SCOPE_MISMATCH")
+        if item.decision != "PASS":
+            reasons.append("CASE_NOT_PASSING")
+        if not item.effective_from <= at <= item.expires_at:
+            reasons.append("CASE_OUTSIDE_VALIDITY")
+        if item.evidence_set_hash in consumed_evidence_sets:
+            reasons.append("DUPLICATE_EVIDENCE_SET")
+        if enforce_membership:
+            if item.scenario_type is E1ScenarioType.CLIENT_ID_SWITCH:
+                allowed = current | cross
+                if (
+                    not children <= allowed
+                    or not children & cross
+                    or len(item.scope_hashes) < 2
+                    or len(item.client_ids) < 2
+                ):
+                    reasons.append("CROSS_SCOPE_TOPOLOGY_INVALID")
+            elif not children <= current:
+                reasons.append("CHILD_SESSION_OUTSIDE_CURRENT_CORPUS")
+        if children & consumed_sessions:
+            reasons.append("CHILD_SESSION_ALREADY_ALLOCATED")
+        if receipts & consumed_receipts:
+            reasons.append("EVENT_RECEIPT_ALREADY_ALLOCATED")
+        if enforce_receipt_resolution and not receipts <= available_receipts:
+            reasons.append("EVENT_RECEIPT_NOT_RESOLVABLE")
+        if reasons:
+            rejected[item.artifact_id] = tuple(sorted(set(reasons)))
+            continue
+        counts[item.scenario_type.value] += 1
+        consumed_sessions.update(children)
+        consumed_receipts.update(receipts)
+        consumed_evidence_sets.add(item.evidence_set_hash)
+    return counts, rejected
 
 
 def _scenario_case_document(
@@ -310,7 +390,7 @@ def _scenario_case_document(
 ) -> E1ScenarioCase:
     first = manifests[0] if manifests else {}
     body = {
-        "schema_version": "e1-scenario-case-v1",
+        "schema_version": "e1-scenario-case-v2",
         "artifact_type": "E1_SCENARIO_CASE",
         "scenario_type": scenario_type,
         "scope": scope,
@@ -322,6 +402,15 @@ def _scenario_case_document(
             sorted(str(item.get("manifest_id")) for item in manifests)
         ),
         "event_receipt_ids": tuple(item.artifact_id for item in receipts),
+        "evidence_set_hash": canonical_hash(
+            {
+                "scenario_type": scenario_type,
+                "child_session_manifest_ids": sorted(
+                    str(item.get("manifest_id")) for item in manifests
+                ),
+                "event_receipt_ids": sorted(item.artifact_id for item in receipts),
+            }
+        ),
         "expected_transition": expected_transition,
         "observed_transition": observed_transition,
         "decision": "PASS" if not reasons else "BLOCKED",

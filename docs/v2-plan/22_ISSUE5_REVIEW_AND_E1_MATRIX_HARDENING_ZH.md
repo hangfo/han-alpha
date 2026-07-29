@@ -1,5 +1,10 @@
 # Issue #5 Review 与 E1 真实矩阵加固决策
 
+> 2026-07-29 amendment: Issue #6 的证据不可复用规则证明本文件的
+> API 22+2 / ALL 9+1 拓扑不足以为每个两 Session Case 提供独立 child。
+> 当前权威拓扑已由 Policy v3 修正为 API 30+4=34、ALL 14+2=16，详见
+> `23_ISSUE6_PREWRITE_REVIEW_AND_REALITY_GATE_ZH.md`。
+
 日期：2026-07-27
 基线：`47a253b`
 

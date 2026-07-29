@@ -1,6 +1,6 @@
 # Known limitations
 
-Updated: 2026-07-27 after Issue #5 E1 matrix hardening.
+Updated: 2026-07-29 after Issue #6 pre-write hardening.
 
 1. Synthetic data is only for engineering validation. Synthetic returns are not investment evidence.
 2. M1 proves PIT contracts only on repository-owned synthetic fixtures. It does not validate any real vendor's timestamps, symbology, revisions, corporate actions, licensing, retention or outage behavior.
@@ -46,3 +46,11 @@ Updated: 2026-07-27 after Issue #5 E1 matrix hardening.
     one whole STK share and USD 1,000 notional. It has not yet sent a Broker write,
     cannot automate TWS GUI manual orders, and must not be represented as strategy
     execution or profitability evidence.
+27. Issue #6 invalidates the earlier API 24 / ALL 10 acceptance totals: those
+    totals could not provide disjoint evidence for every required two-Session
+    Case. Policy v3 requires API 34 and ALL 16 Sessions.
+28. TWS contract qualification for SPY succeeds, but the Paper session currently
+    lacks eligible real-time market data. Delayed quotes are not accepted for a
+    filling fixture, so no Quote Capsule, Permit, lifecycle or first PLACE exists.
+29. Fixture lifecycle recovery is application-auditable but not an OS-isolated
+    trading daemon. Host compromise remains outside the Python safety boundary.

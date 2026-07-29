@@ -396,8 +396,6 @@ class _ObserverOnlyIBApp(_IBApp):
             "msgLoopTmo",
             "reset",
             "run",
-            "sendMsg",
-            "sendMsgProtoBuf",
             "serverVersion",
             "setConnState",
             "setConnectOptions",
@@ -416,8 +414,24 @@ class _ObserverOnlyIBApp(_IBApp):
             "verifyRequestProtoBuf",
         }
     )
+    _TRANSPORT_SEND_ENTRYPOINTS = frozenset(
+        {
+            "connect",
+            "startApi",
+            "startApiProtoBuf",
+            "verifyAndAuthRequest",
+            "verifyRequest",
+            "verifyRequestProtoBuf",
+        }
+    )
 
     def __getattribute__(self, name: str) -> Any:
+        if name in {"sendMsg", "sendMsgProtoBuf"}:
+            state = object.__getattribute__(self, "__dict__")
+            guard = state.get("_request_guard")
+            if guard is None or int(getattr(guard, "depth", 0)) <= 0:
+                return object.__getattribute__(self, "_writes_forbidden")
+            return super().__getattribute__(name)
         if (
             not name.startswith("_")
             and callable(getattr(EClient, name, None))
@@ -425,7 +439,23 @@ class _ObserverOnlyIBApp(_IBApp):
             and name not in type(self)._TRANSPORT_ECLIENT_ALLOWLIST
         ):
             return object.__getattribute__(self, "_writes_forbidden")
-        return super().__getattribute__(name)
+        resolved = super().__getattribute__(name)
+        if (
+            name in type(self).OBSERVER_ECLIENT_ALLOWLIST
+            or name in type(self)._TRANSPORT_SEND_ENTRYPOINTS
+        ) and callable(resolved):
+
+            def guarded_read_request(*args: Any, **kwargs: Any) -> Any:
+                state = object.__getattribute__(self, "__dict__")
+                guard = state.setdefault("_request_guard", threading.local())
+                guard.depth = int(getattr(guard, "depth", 0)) + 1
+                try:
+                    return resolved(*args, **kwargs)
+                finally:
+                    guard.depth -= 1
+
+            return guarded_read_request
+        return resolved
 
     @staticmethod
     def _writes_forbidden(*_args: Any, **_kwargs: Any) -> None:

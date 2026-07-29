@@ -8,10 +8,12 @@ import pytest
 
 from hanalpha.execution import e1_scenarios
 from hanalpha.execution.e1_scenarios import (
+    E1_ACCEPTANCE_POLICIES,
     E1AcceptancePolicy,
     E1EventType,
     E1ScenarioType,
     E1ScopeName,
+    allocate_scenario_cases,
     build_scenario_case,
     create_event_receipt,
 )
@@ -105,6 +107,182 @@ def test_client_switch_is_a_cross_scope_case(monkeypatch, tmp_path) -> None:
     assert case.decision == "PASS"
     assert len(case.scope_hashes) == 2
     assert case.observed_transition == "CLIENT_AND_SCOPE_CHANGED_STATE_COMPATIBLE"
+    counts, rejected = allocate_scenario_cases(
+        (case,),
+        scope=E1ScopeName.API,
+        at=NOW,
+        corpus_manifest_ids=(),
+        cross_scope_manifest_ids=("1" * 64, "2" * 64),
+        available_receipt_ids=(),
+    )
+    assert counts["client_id_switch"] == 1
+    assert rejected == {}
+
+
+def test_case_evidence_cannot_be_rewrapped_or_reused(monkeypatch, tmp_path) -> None:
+    manifests = {
+        str(index): {
+            **_manifest(
+                manifest_id=str(index) * 64,
+                label="static_position",
+            ),
+            "scenario_observation": {"position_count": 1, "order_count": 0},
+        }
+        for index in range(1, 6)
+    }
+    _patch_manifests(monkeypatch, manifests)
+    paths = tuple(tmp_path / name for name in manifests)
+    for path in paths:
+        path.mkdir()
+    first = build_scenario_case(
+        scenario_type=E1ScenarioType.STATIC_POSITION,
+        scope=E1ScopeName.API,
+        session_dirs=paths,
+        event_receipts=(),
+        effective_from=NOW,
+        expires_at=NOW + timedelta(days=1),
+    )
+    rewrapped = build_scenario_case(
+        scenario_type=E1ScenarioType.STATIC_POSITION,
+        scope=E1ScopeName.API,
+        session_dirs=paths,
+        event_receipts=(),
+        effective_from=NOW - timedelta(minutes=1),
+        expires_at=NOW + timedelta(days=2),
+    )
+    assert first.artifact_id != rewrapped.artifact_id
+    assert first.evidence_set_hash == rewrapped.evidence_set_hash
+    counts, rejected = allocate_scenario_cases(
+        (first, rewrapped),
+        scope=E1ScopeName.API,
+        at=NOW,
+        corpus_manifest_ids=(str(index) * 64 for index in range(1, 6)),
+    )
+    assert counts["static_position"] == 1
+    assert len(rejected) == 1
+    assert set(next(iter(rejected.values()))) & {
+        "DUPLICATE_EVIDENCE_SET",
+        "CHILD_SESSION_ALREADY_ALLOCATED",
+    }
+
+
+def test_case_children_must_belong_to_current_corpus(monkeypatch, tmp_path) -> None:
+    manifests = {
+        str(index): {
+            **_manifest(
+                manifest_id=str(index) * 64,
+                label="static_position",
+            ),
+            "scenario_observation": {"position_count": 1, "order_count": 0},
+        }
+        for index in range(1, 6)
+    }
+    _patch_manifests(monkeypatch, manifests)
+    paths = tuple(tmp_path / name for name in manifests)
+    for path in paths:
+        path.mkdir()
+    case = build_scenario_case(
+        scenario_type=E1ScenarioType.STATIC_POSITION,
+        scope=E1ScopeName.API,
+        session_dirs=paths,
+        event_receipts=(),
+        effective_from=NOW,
+        expires_at=NOW + timedelta(days=1),
+    )
+    counts, rejected = allocate_scenario_cases(
+        (case,),
+        scope=E1ScopeName.API,
+        at=NOW,
+        corpus_manifest_ids=("1" * 64,),
+    )
+    assert counts == {}
+    assert rejected[case.artifact_id] == ("CHILD_SESSION_OUTSIDE_CURRENT_CORPUS",)
+
+
+def test_case_allocator_rejects_wrong_scope_status_and_validity(monkeypatch, tmp_path) -> None:
+    manifests = {
+        str(index): {
+            **_manifest(
+                manifest_id=str(index) * 64,
+                label="static_position",
+            ),
+            "scenario_observation": {"position_count": 1, "order_count": 0},
+        }
+        for index in range(1, 6)
+    }
+    _patch_manifests(monkeypatch, manifests)
+    paths = tuple(tmp_path / name for name in manifests)
+    for path in paths:
+        path.mkdir()
+    case = build_scenario_case(
+        scenario_type=E1ScenarioType.STATIC_POSITION,
+        scope=E1ScopeName.API,
+        session_dirs=paths,
+        event_receipts=(),
+        effective_from=NOW,
+        expires_at=NOW + timedelta(days=1),
+    )
+    variants = (
+        case.model_copy(update={"scope": E1ScopeName.ALL}),
+        case.model_copy(update={"decision": "BLOCKED"}),
+        case.model_copy(
+            update={
+                "effective_from": NOW - timedelta(days=3),
+                "expires_at": NOW - timedelta(days=2),
+            }
+        ),
+    )
+    expected = (
+        "CASE_SCOPE_MISMATCH",
+        "CASE_NOT_PASSING",
+        "CASE_OUTSIDE_VALIDITY",
+    )
+    for variant, reason in zip(variants, expected, strict=True):
+        counts, rejected = allocate_scenario_cases(
+            (variant,),
+            scope=E1ScopeName.API,
+            at=NOW,
+            corpus_manifest_ids=(str(index) * 64 for index in range(1, 6)),
+        )
+        assert counts == {}
+        assert reason in rejected[variant.artifact_id]
+    unresolved_receipt = case.model_copy(update={"event_receipt_ids": ("9" * 64,)})
+    counts, rejected = allocate_scenario_cases(
+        (unresolved_receipt,),
+        scope=E1ScopeName.API,
+        at=NOW,
+        corpus_manifest_ids=(str(index) * 64 for index in range(1, 6)),
+        available_receipt_ids=(),
+    )
+    assert counts == {}
+    assert "EVENT_RECEIPT_NOT_RESOLVABLE" in rejected[unresolved_receipt.artifact_id]
+
+
+def test_client_switch_requires_explicit_cross_scope_membership(monkeypatch, tmp_path) -> None:
+    manifests = {
+        "one": _manifest(manifest_id="1" * 64, client_id=41, scope_hash="4" * 64),
+        "two": _manifest(manifest_id="2" * 64, client_id=42, scope_hash="5" * 64),
+    }
+    _patch_manifests(monkeypatch, manifests)
+    for name in manifests:
+        (tmp_path / name).mkdir()
+    case = build_scenario_case(
+        scenario_type=E1ScenarioType.CLIENT_ID_SWITCH,
+        scope=E1ScopeName.API,
+        session_dirs=(tmp_path / "one", tmp_path / "two"),
+        event_receipts=(),
+        effective_from=NOW,
+        expires_at=NOW + timedelta(days=1),
+    )
+    counts, rejected = allocate_scenario_cases(
+        (case,),
+        scope=E1ScopeName.API,
+        at=NOW,
+        corpus_manifest_ids=(),
+        cross_scope_manifest_ids=("1" * 64,),
+    )
+    assert counts == {}
+    assert rejected[case.artifact_id] == ("CROSS_SCOPE_TOPOLOGY_INVALID",)
 
 
 def test_event_receipts_reject_secret_shaped_detail_keys() -> None:
@@ -130,6 +308,22 @@ def test_acceptance_policy_rejects_runner_evaluator_arithmetic_drift() -> None:
             session_requirements={"empty_account": 5, "client_id_switch": 2},
             scenario_case_requirements={"client_id_switch": 1},
         )
+
+
+def test_acceptance_policy_reserves_disjoint_sessions_for_every_case() -> None:
+    api = E1_ACCEPTANCE_POLICIES[E1ScopeName.API]
+    all_scope = E1_ACCEPTANCE_POLICIES[E1ScopeName.ALL]
+    assert api.minimum_unique_sessions == 34
+    assert api.minimum_scope_sessions == 30
+    assert api.minimum_cross_scope_sessions == 4
+    assert all_scope.minimum_unique_sessions == 16
+    assert all_scope.minimum_scope_sessions == 14
+    assert all_scope.minimum_cross_scope_sessions == 2
+    for policy in (api, all_scope):
+        for scenario, required_cases in policy.scenario_case_requirements.items():
+            if scenario in {"static_position", "api_order", "manual_order"}:
+                continue
+            assert policy.session_requirements[scenario] == required_cases * 2
 
 
 def _receipt(event_type: E1EventType, details: dict[str, object], phase: str = "POST"):

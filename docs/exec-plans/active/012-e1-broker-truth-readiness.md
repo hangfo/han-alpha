@@ -1,6 +1,6 @@
 # E1 execution plan: Broker Truth Readiness
 
-Status: E1-A COMPLETE; ISSUE #5 LOCAL HARDENING VERIFIED; REAL MATRIX BLOCKED
+Status: E1-A COMPLETE; ISSUE #6 PRE-WRITE HARDENING VERIFIED; REAL MATRIX BLOCKED
 Owner: Codex and operator
 Started: 2026-07-26
 
@@ -59,9 +59,10 @@ capability.
 - Five API-Scope `empty_account` sessions are eligible, zero-drop and reconciled.
   Scenario-state gates now reject empty/static-position/order label mismatches.
 - Typed Scenario Cases now require real child Session IDs and event receipts for
-  process/TWS/network/nightly/client-switch evidence. The single acceptance
-  policy fixes API topology at 22 same-Scope plus two cross-Scope Sessions (24
-  total), and ALL at 9+1 (10 total).
+  process/TWS/network/nightly/client-switch evidence. Issue #6 proved the old
+  API 22+2 / ALL 9+1 topology could not satisfy multiple non-reusable
+  two-Session Cases. Policy v3 requires API 30 same-Scope + 4 cross-Scope
+  Sessions (34 total), and ALL 14+2 (16 total).
 - Every new Session binds the capture process boot UUID. A Process Restart Case
   rejects receipts that do not exactly match two distinct child Session boot
   UUIDs; a later label or fabricated PID cannot satisfy it.
@@ -72,11 +73,26 @@ capability.
   imported by runtime, refuses live ports/ambiguous accounts/excess size and
   consumes a one-shot Permit before a Broker write. No real fixture write has
   yet been attempted.
+- Scenario Case v2 adds a validity-independent Evidence Set hash. Acceptance
+  allocates every child Session and Event Receipt once, verifies corpus
+  membership, and rejects duplicate or validity-rewrapped evidence.
+- Raw `sendMsg`/`sendMsgProtoBuf` are unreachable to observer callers and are
+  enabled only inside a thread-local declared read or handshake context.
+- PLACE/MODIFY/CLOSE permits require a fresh, unique, real-time,
+  regular-session IBKR Quote/Contract Capsule with a tight spread and price
+  collar. Outcomes distinguish open, fill, cancel, reject and Unknown.
+- A resumable lifecycle ledger records the baseline and every one-shot action.
+  Cleanup passes only when no fixture order remains and the position returns to
+  baseline.
 - The hardened positive allowlist passed a fresh authenticated zero-write
   observation with Client 419: complete Scope, 31 accepted/written facts, no
   position/order and no future manual-order binding claim. A normalized
   compatibility Scope hash preserves the five immutable legacy Client 41
   Sessions while retaining their original raw Scope hashes.
+- The Issue #6 raw-send guard passed another real zero-write observation with
+  Client 419: 33 accepted/written facts, zero drops, complete Scope and no
+  position/order. SPY contract qualification succeeded, but TWS reported no
+  eligible real-time market data; no Quote Capsule, Permit or write was created.
 
 ## External sequence
 
@@ -95,9 +111,9 @@ capability.
    cancel and Bracket tapes.
 8. Replay callback permutation/duplication/delay cases deterministically.
 
-Steps 1-4, the API `empty_account 5/5` slice and Issue #5 local contracts are complete. The runner now
+Steps 1-4, the API `empty_account 5/5` slice and Issue #6 local contracts are complete. The runner now
 stops at `static_position 0/5`; the operator must create a genuine bounded Paper
-position before another capture. API/ALL order, process/TWS restart, network
+position after the real-time Quote gate passes. API/ALL order, process/TWS restart, network
 recovery, nightly reset and client-switch windows remain `BLOCKED_HUMAN_ACTION`.
 
 ## Exit gate

@@ -19,6 +19,8 @@ STRICT_DOCUMENT_TYPES = frozenset(
         ArtifactType.E1_EVENT_RECEIPT,
         ArtifactType.E1_FIXTURE_PERMIT,
         ArtifactType.E1_FIXTURE_RECEIPT,
+        ArtifactType.E1_QUOTE_CAPSULE,
+        ArtifactType.E1_CLEANUP_RECEIPT,
     }
 )
 
@@ -35,6 +37,8 @@ SCHEMA_PREFIXES: dict[ArtifactType, str] = {
     ArtifactType.E1_EVENT_RECEIPT: "e1-event-receipt-",
     ArtifactType.E1_FIXTURE_PERMIT: "e1-fixture-permit-",
     ArtifactType.E1_FIXTURE_RECEIPT: "e1-fixture-receipt-",
+    ArtifactType.E1_QUOTE_CAPSULE: "e1-quote-capsule-",
+    ArtifactType.E1_CLEANUP_RECEIPT: "e1-cleanup-receipt-",
 }
 
 
@@ -73,6 +77,8 @@ def strict_document_valid(document: dict[str, Any], artifact_type: ArtifactType)
         ArtifactType.E1_EVENT_RECEIPT,
         ArtifactType.E1_FIXTURE_PERMIT,
         ArtifactType.E1_FIXTURE_RECEIPT,
+        ArtifactType.E1_QUOTE_CAPSULE,
+        ArtifactType.E1_CLEANUP_RECEIPT,
     }:
         return (
             document.get("artifact_type") == artifact_type.value

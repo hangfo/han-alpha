@@ -1,5 +1,61 @@
 # Verification report
 
+## Issue #6 pre-write hardening and real quote gate - 2026-07-29
+
+Baseline: `8c14f86162d20e48b67e3dfc7e61a25d477747da`.
+
+Detailed decisions:
+`docs/v2-plan/23_ISSUE6_PREWRITE_REVIEW_AND_REALITY_GATE_ZH.md`.
+
+VERIFIED:
+
+- Scenario Case v2 derives a validity-independent Evidence Set hash. Corpus,
+  runner and Registry acceptance allocate each child Session/Event Receipt once,
+  require Session membership and require referenced Receipt artifacts to resolve.
+- The non-reuse invariant exposed an impossible old topology. Policy v3 requires
+  API 30 same-Scope + 4 cross-Scope Sessions (34 total) and ALL 14+2 (16 total);
+  every repeated restart/recovery/client-switch Case has two independent child
+  Sessions.
+- Observer raw `sendMsg` and protobuf send are unavailable to callers. A
+  thread-local guard opens transport only while an allowlisted read request or
+  required connection handshake is executing; direct raw/FA/order/manual-binding
+  methods fail closed.
+- Quote Capsules require one unique SMART/USD/STK `conId`, IBKR real-time
+  bid/ask/last, contract liquid-hours RTH, a tight spread and 15-second freshness.
+  PLACE/MODIFY/CLOSE Permit validity cannot outlive the Quote Capsule.
+- Fixture outcomes distinguish accepted-open, filled, cancelled, rejected and
+  Unknown. MODIFY binds the original contract, side, type, quantity, account,
+  broker order ID and `E1FIX:` ref.
+- A resumable SQLite lifecycle records the zero baseline and every one-shot
+  Permit/Receipt. Every execute requires a prevalidated lifecycle binding.
+  Cleanup passes only with zero outstanding fixture orders and a return to
+  baseline; an Unknown write remains non-retryable. Known informational TWS
+  farm-ready callbacks do not masquerade as order rejection.
+- A real authenticated Observer capture on TWS Paper 7497 passed 33 accepted /
+  33 written facts, zero drops, complete Scope and zero positions/orders.
+- SPY resolved to exactly one contract. The real-time quote request returned
+  `REALTIME_MARKET_DATA_ENTITLEMENT_REQUIRED`; fail-closed behavior prevented a
+  Quote Capsule, Permit, lifecycle and Broker write.
+- `./scripts/preflight.sh`: PASS with Python 3.12.13.
+- `./scripts/verify_all.sh`: PASS; 317 Python tests plus one expected skip,
+  85.03% branch-aware coverage, Ruff, strict mypy, package/CLI/API/research
+  smoke checks, frontend lint/typecheck/Vitest/build and zero npm audit
+  vulnerabilities. Main JS remains 197.09 kB raw / 62.09 kB gzip.
+
+BLOCKED:
+
+- The first one-share Paper PLACE and subsequent static/API-order matrix require
+  eligible real-time US equity market data during RTH.
+- TWS/network/nightly/manual-order actions remain explicit external events.
+- SEC User-Agent, FRED key, Massive key, written data rights and independent
+  review remain absent, so R1-B real probes are blocked.
+
+NOT IMPLEMENTED:
+
+- No delayed-price filling fixture, no bypass permit, no Live order and no E2/E3
+  authority.
+- No profitability claim. R2 remains offline-only until R1 PIT qualification.
+
 ## Authenticated IBKR Paper onboarding and E1 empty-account slice - 2026-07-27
 
 Baseline: `1c56686df16eda41864bb35446b8aceabdc8aaaf`.

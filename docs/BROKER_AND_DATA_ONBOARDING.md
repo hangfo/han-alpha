@@ -1,6 +1,6 @@
 # Broker and real-data onboarding
 
-Updated: 2026-07-27
+Updated: 2026-07-29
 
 ## Current local result
 
@@ -16,15 +16,19 @@ E1 API empty_account sessions: 5/5
 MASSIVE_API_KEY configured: false
 FRED_API_KEY configured: false
 SEC_USER_AGENT configured: false
+TWS API Read-Only disabled for bounded Paper fixture: true
+SPY real-time market-data entitlement: false
 ```
 
 TWS Server Version 225, the single authenticated managed Paper account, account
 summary, positions, API completed/open orders and executions were observed through
 the official API without printing the identifier or persisting it outside
 Keychain. E1-B is
-still `BLOCKED_HUMAN_ACTION` at `static_position`: the remaining matrix requires
-genuine Paper positions/orders and bounded restart, recovery, nightly-reset and
-client-switch events. No vendor request or Broker write was made.
+still `BLOCKED_EXTERNAL_RIGHTS` before `static_position`: the quote-bound fixture
+resolves the unique SPY contract but TWS does not provide eligible real-time
+bid/ask/last data. The remaining matrix also requires genuine Paper
+positions/orders and bounded restart, recovery, nightly-reset and client-switch
+events. No vendor request or Broker write was made.
 
 The preferred local secret store is macOS Keychain. Secret values are read from
 stdin by the onboarding CLI, are never placed in command arguments, and are not
@@ -77,7 +81,8 @@ In TWS/IB Gateway:
 1. log into the Paper account with normal GUI/2FA;
 2. enable ActiveX and Socket Clients;
 3. use Paper port 7497 for TWS or 4002 for Gateway unless deliberately changed;
-4. keep API Read-Only enabled for account/position-only captures;
+4. keep API Read-Only enabled for account/position-only captures; disable it only
+   for the separately audited bounded Paper fixture/manual-order phase;
 5. use a dedicated client ID;
 6. enable detailed API logs for the bounded burn-in window;
 7. verify account and market-data entitlements manually.
@@ -87,6 +92,31 @@ introspectable. IBKR documents that order information is unavailable while that
 setting is enabled. Therefore ALL-Scope manual-order visibility uses a distinct
 operator attestation after disabling the TWS setting; Han Alpha still instantiates
 an observer-only client whose order-mutating methods raise `PermissionError`.
+
+Before the first fixture write, confirm a real-time US equity Level 1 entitlement
+is active for the Paper session. Han Alpha refuses delayed data for a filling
+test. A successful bounded sequence begins with:
+
+Official requirements and the Paper/live sharing rules are maintained at
+<https://www.interactivebrokers.com/campus/ibkr-api-page/market-data-subscriptions/>.
+In Client Portal use **Settings → Trading Platform → Market Data Subscriptions**,
+enable the Market Data API acknowledgement, and either subscribe the relevant
+live username or share its market data with the Paper username. SPY is listed by
+IBKR under US Network B; the exact package, subscriber status, fees and account
+minimums must be reviewed by the account owner before purchase.
+
+```bash
+python scripts/e1_paper_fixture.py capture-quote \
+  --symbol SPY --port 7497 --client-id 9100 --attest-paper
+```
+
+`REALTIME_MARKET_DATA_ENTITLEMENT_REQUIRED` is a hard stop. Do not manually
+construct a permit or substitute a delayed/browser price. After a Quote Capsule
+is produced, `start-lifecycle` records the Broker baseline; PLACE/MODIFY/CANCEL/
+CLOSE permits must remain bound to that capsule and lifecycle. The `execute`
+command requires `--lifecycle-id`; there is no lifecycle-free fixture-write path.
+`finish-lifecycle` passes only after no `E1FIX:` order remains and the position
+returns to baseline.
 
 Store the Paper account in Keychain. When exactly one Paper account is logged in,
 prefer automatic redacted discovery:

@@ -115,6 +115,12 @@ Case；Observer改为正向只读方法白名单；订单快照与未来自动�
 Paper fixture 仅作为一次性测试事实生产器。尚未执行任何fixture Broker写入，
 也尚无真实static/API/manual order或reset Case，因此E1-B仍不勾选。
 
+Issue #6 发现旧24/10拓扑无法同时满足不复用的两Session Case。Acceptance
+Policy v3改为API 30+4=34、ALL 14+2=16；Scenario Evidence/Receipt一次性分配，
+Observer raw transport使用线程局部内部守卫，Fixture绑定实时RTH Quote/Contract
+Capsule并采用精确Outcome和可恢复Cleanup Receipt。真实Observer 33/33零丢失
+通过；SPY实时行情权限缺失，故没有Quote Capsule、Permit或PLACE，E1-B仍不勾选。
+
 ## 8. 工程质量
 
 - [x] Ruff通过。

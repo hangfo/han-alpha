@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from typer.testing import CliRunner
 
+import hanalpha.ops.artifact_registry as artifact_registry_module
 from hanalpha.cli import app
 from hanalpha.config import SecretSettings, load_config
 from hanalpha.execution.burn_in import (
@@ -552,7 +553,7 @@ def test_external_acceptance_summary_counts_only_verified_bounded_evidence(tmp_p
     )
     summary = registry.external_acceptance_summary()
     assert summary["e1"]["api"]["completed"] == 1
-    assert summary["e1"]["api"]["required"] == 24
+    assert summary["e1"]["api"]["required"] == 34
     assert summary["e1"]["all"]["completed"] == 0
     assert summary["r1"]["sec_edgar"] == {
         "sample_manifests": 1,
@@ -661,6 +662,37 @@ def test_artifact_registry_requires_valid_schema_and_policy(tmp_path) -> None:
     assert burn_resolution.artifact_schema_valid
     assert "ARTIFACT_POLICY_NOT_PASSED" in burn_resolution.reasons
     registry.close()
+
+
+def test_fixture_artifact_policy_distinguishes_quote_outcome_and_cleanup() -> None:
+    assert artifact_registry_module._policy_passed(
+        {
+            "decision": "PASS",
+            "market_data_type": "REALTIME",
+            "market_phase": "REGULAR",
+        },
+        ArtifactType.E1_QUOTE_CAPSULE,
+    )
+    assert not artifact_registry_module._policy_passed(
+        {
+            "decision": "PASS",
+            "market_data_type": "DELAYED",
+            "market_phase": "REGULAR",
+        },
+        ArtifactType.E1_QUOTE_CAPSULE,
+    )
+    assert artifact_registry_module._policy_passed(
+        {"decision": "BROKER_FILLED"},
+        ArtifactType.E1_FIXTURE_RECEIPT,
+    )
+    assert not artifact_registry_module._policy_passed(
+        {"decision": "BROKER_REJECTED"},
+        ArtifactType.E1_FIXTURE_RECEIPT,
+    )
+    assert artifact_registry_module._policy_passed(
+        {"decision": "CLEAN"},
+        ArtifactType.E1_CLEANUP_RECEIPT,
+    )
 
 
 def test_e1_event_receipt_is_hash_verified_by_artifact_registry(tmp_path) -> None:

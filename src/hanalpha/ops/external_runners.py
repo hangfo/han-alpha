@@ -10,9 +10,10 @@ from hanalpha.config import SecretSettings
 from hanalpha.execution.burn_in import verify_burn_in_manifest
 from hanalpha.execution.e1_scenarios import (
     E1_ACCEPTANCE_POLICIES,
+    E1EventReceipt,
     E1ScopeName,
+    allocate_scenario_cases,
     load_scenario_cases,
-    scenario_case_counts,
 )
 from hanalpha.ops.artifact_registry import ArtifactRegistry, ArtifactType
 from hanalpha.ops.artifacts import write_immutable_json
@@ -95,11 +96,34 @@ def e1_progress(output_root: Path, scope: E1Scope) -> dict[str, Any]:
         )
     )
     invalid_cases += len(cases) - len(accepted_cases)
-    case_counts = scenario_case_counts(
+    scope_manifest_ids = {
+        str(item.get("manifest_id"))
+        for item in verified_manifests
+        if item.get("capture_scenario") != "client_id_switch"
+    }
+    cross_scope_manifest_ids = {
+        str(item.get("manifest_id"))
+        for item in verified_manifests
+        if item.get("capture_scenario") == "client_id_switch"
+    }
+    available_receipt_ids: set[str] = set()
+    for receipt_path in (output_root / "receipts").glob("*.json"):
+        try:
+            receipt = E1EventReceipt.model_validate_json(
+                receipt_path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            continue
+        available_receipt_ids.add(receipt.artifact_id)
+    case_counts, allocation_rejections = allocate_scenario_cases(
         accepted_cases,
         scope=E1ScopeName(scope.value),
         at=datetime.now(UTC),
+        corpus_manifest_ids=scope_manifest_ids,
+        cross_scope_manifest_ids=cross_scope_manifest_ids,
+        available_receipt_ids=available_receipt_ids,
     )
+    invalid_cases += len(allocation_rejections)
     case_required = dict(E1_SCENARIO_CASES[scope])
     case_missing = {
         scenario: max(0, target - case_counts.get(scenario, 0))
@@ -135,6 +159,10 @@ def e1_progress(output_root: Path, scope: E1Scope) -> dict[str, Any]:
         "missing_case_counts": case_missing,
         "invalid_session_count": invalid_sessions,
         "invalid_case_count": invalid_cases,
+        "case_allocation_rejections": {
+            case_id: list(reasons)
+            for case_id, reasons in sorted(allocation_rejections.items())
+        },
         "next_scenario": next_scenario,
         "next_action_kind": next_action_kind,
         "next_human_action": _scenario_action(
