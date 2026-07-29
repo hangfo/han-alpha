@@ -33,7 +33,10 @@ async def test_sec_probe_is_bounded_redacted_and_registry_resolvable(tmp_path) -
         seen_user_agent = request.headers["user-agent"]
         return httpx.Response(
             200,
-            headers={"content-type": "application/json"},
+            headers={
+                "content-type": "application/json",
+                "date": "Mon, 01 Jan 2024 00:00:00 GMT",
+            },
             json={
                 "cik": "320193",
                 "tickers": ["AAPL"],
@@ -69,10 +72,13 @@ async def test_sec_probe_is_bounded_redacted_and_registry_resolvable(tmp_path) -
     assert response["request_started_at"] <= response["response_completed_at"]
     assert response["response_completed_at"] <= response["persisted_at"]
     assert response["monotonic_duration_ms"] >= 0
+    assert response["server_date"] == "Mon, 01 Jan 2024 00:00:00 GMT"
+    assert response["clock_skew_seconds"] is not None
     assert response["transport_sha256"] != response["normalized_sha256"]
     assert (path.parent / response["transport_file"]).read_bytes().startswith(b"{")
     assert json.loads((path.parent / response["headers_file"]).read_text()) == {
-        "content-type": "application/json"
+        "content-type": "application/json",
+        "date": "Mon, 01 Jan 2024 00:00:00 GMT",
     }
     registry = ArtifactRegistry(tmp_path / "registry.sqlite3")
     try:

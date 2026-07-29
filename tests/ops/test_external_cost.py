@@ -155,6 +155,15 @@ def test_cost_receipt_rejects_nonzero_policy_and_invalid_count() -> None:
     )
     assert blocked["decision"] == "BLOCK"
     assert "ONLY_ZERO_INCREMENTAL_COST_IS_SUPPORTED" in blocked["reasons"]
+    negative_limit = external_cost_receipt(
+        provider=ExternalProvider.SEC,
+        action=ExternalAction.BOUNDED_GET,
+        request_count=1,
+        max_new_cost=Decimal("-1"),
+        existing_entitlement=False,
+        at=NOW,
+    )
+    assert "INCREMENTAL_COST_EXCEEDS_LIMIT" in negative_limit["reasons"]
     with pytest.raises(ValueError, match="positive"):
         external_cost_receipt(
             provider=ExternalProvider.SEC,
