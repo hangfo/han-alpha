@@ -65,5 +65,6 @@ Updated: 2026-07-30 after Issue #7 zero-cost and lifecycle hardening.
     acknowledgement must be verified before a fixture Permit can exist.
 32. `51b8c95` was committed and pushed successfully. Its GitHub red check was a
     clean-CI collection failure because the separately licensed official `ibapi`
-    package is intentionally absent there. Fixture imports are now optional for
-    test collection while every real API operation still fails closed without it.
+    package is intentionally absent there. Fixture and observer contract
+    fallbacks now support clean-CI safety tests while every real API operation
+    still fails closed without it.

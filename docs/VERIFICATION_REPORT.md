@@ -777,9 +777,10 @@ VERIFIED locally:
 
 - GitHub commit `51b8c95` exists on `origin/main`; its failed Actions job was a
   pytest collection error on clean Linux because the separately licensed
-  official `ibapi` dependency was absent. The fixture module now remains
-  importable/testable without that package, while every real API path calls an
-  explicit fail-closed availability gate.
+  official `ibapi` dependency was absent. The fixture and main adapter now expose
+  test-only contract-compatible fallbacks without that package, while every real
+  API path calls an explicit fail-closed availability gate. A subprocess that
+  blocks every `ibapi` import verified the observer allowlist and write denial.
 - Fixture PLACE/MODIFY/CLOSE lifecycle actions require unique fresh Quote
   Capsules. The ledger binds account, contract, security type, currency,
   exchange, quantity and notional limits, records Quote/Permit/Receipt lineage,

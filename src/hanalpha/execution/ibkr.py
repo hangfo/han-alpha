@@ -40,6 +40,67 @@ except ImportError:  # pragma: no cover - depends on local official TWS API inst
         def __init__(self, wrapper: Any) -> None:
             self.wrapper = wrapper
 
+    def _unavailable_ibapi_method(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    for _method_name in {
+        "cancelAccountSummary",
+        "cancelAccountSummaryProtoBuf",
+        "cancelOrder",
+        "cancelPositions",
+        "cancelPositionsProtoBuf",
+        "checkConnected",
+        "connect",
+        "disconnect",
+        "exerciseOptions",
+        "isConnected",
+        "keyboardInterrupt",
+        "keyboardInterruptHard",
+        "logRequest",
+        "msgLoopRec",
+        "msgLoopTmo",
+        "placeOrder",
+        "replaceFA",
+        "reqAccountSummary",
+        "reqAccountSummaryProtoBuf",
+        "reqAllOpenOrders",
+        "reqAllOpenOrdersProtoBuf",
+        "reqAutoOpenOrders",
+        "reqCompletedOrders",
+        "reqCompletedOrdersProtoBuf",
+        "reqCurrentTime",
+        "reqCurrentTimeProtoBuf",
+        "reqExecutions",
+        "reqExecutionsProtoBuf",
+        "reqGlobalCancel",
+        "reqManagedAccts",
+        "reqManagedAcctsProtoBuf",
+        "reqOpenOrders",
+        "reqPositions",
+        "reqPositionsProtoBuf",
+        "reset",
+        "run",
+        "sendMsg",
+        "sendMsgProtoBuf",
+        "serverVersion",
+        "setConnState",
+        "setConnectOptions",
+        "startApi",
+        "startApiProtoBuf",
+        "twsConnectionTime",
+        "useProtoBuf",
+        "validateAttachedOrdersParameters",
+        "validateInvalidSymbols",
+        "validateOrderParameters",
+        "verifyAndAuthMessage",
+        "verifyAndAuthRequest",
+        "verifyMessage",
+        "verifyMessageProtoBuf",
+        "verifyRequest",
+        "verifyRequestProtoBuf",
+    }:
+        setattr(EClient, _method_name, _unavailable_ibapi_method)
+
     Contract = Any
     Order = Any
     Execution = Any
