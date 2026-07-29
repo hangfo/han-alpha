@@ -1,6 +1,6 @@
 # R1 execution plan: PIT Data Qualification
 
-Status: R1-A QUALIFICATION AUTHORITY COMPLETE; R1-B SOURCE ACCEPTANCE BLOCKED
+Status: R1-A COMPLETE; SEC TRANSPORT PROBED; R1-B RIGHTS/POLICY ACCEPTANCE BLOCKED
 Owner: Codex and data owner
 Started: 2026-07-26
 
@@ -51,6 +51,11 @@ evidence by itself.
   placeholders remain BLOCKED until real external evidence and independent
   signatures exist.
 - The Ops acceptance panel reports only Registry-verified per-source samples.
+- Every live runner first persists a zero-incremental-cost decision. SEC is
+  capped at two requests and 2 requests/second; Massive requires a confirmed
+  Basic/free or existing fixed plan; FRED is blocked pending current terms
+  review. Request, first-byte, completion, normalization and persistence times
+  plus server-Date skew are preserved.
 
 ## Next external work
 
@@ -63,9 +68,12 @@ evidence by itself.
 6. Only after a QUALIFIED report, implement the production adapter and publish a
    content-addressed PIT snapshot.
 
-The current machine has no SEC identity, FRED key or Massive key stored. No
-vendor request was made; real source execution remains `BLOCKED_HUMAN_ACTION`,
-then `BLOCKED_EXTERNAL_RIGHTS` until written rights and independent receipts exist.
+The current machine has all three identities/keys in macOS Keychain. On
+2026-07-30 SEC completed the bounded two-request proof run and produced immutable
+transport/timing/audit evidence, but it remains `BLOCKED_EXTERNAL_RIGHTS` until
+written rights and independent receipts exist. FRED was blocked before network
+by policy review. Massive was blocked before network because its exact plan and
+existing entitlement have not been attested.
 
 ## First research slate after qualification
 

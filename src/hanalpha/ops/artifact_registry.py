@@ -470,6 +470,7 @@ def _schema_valid(document: dict[str, Any], artifact_type: ArtifactType) -> bool
         ArtifactType.E1_FIXTURE_RECEIPT: "e1-fixture-receipt-",
         ArtifactType.E1_QUOTE_CAPSULE: "e1-quote-capsule-",
         ArtifactType.E1_CLEANUP_RECEIPT: "e1-cleanup-receipt-",
+        ArtifactType.EXTERNAL_COST_RECEIPT: "external-cost-receipt-",
     }
     prefix = expected_prefixes.get(artifact_type)
     if prefix and not schema.startswith(prefix):
@@ -526,6 +527,11 @@ def _policy_passed(document: dict[str, Any], artifact_type: ArtifactType) -> boo
         )
     if artifact_type is ArtifactType.E1_CLEANUP_RECEIPT:
         return document.get("decision") == "CLEAN"
+    if artifact_type is ArtifactType.EXTERNAL_COST_RECEIPT:
+        return (
+            document.get("decision") == "ALLOW"
+            and document.get("expected_incremental_cost_usd") == "0"
+        )
     return document.get("decision") in {"PASS", "APPROVE", "APPROVED", "VERIFIED"}
 
 

@@ -27,6 +27,11 @@ from hanalpha.config import load_config
 from hanalpha.execution.ibkr_observer import account_hash, broker_account_identity
 from hanalpha.ops.artifact_registry import ArtifactRegistry, ArtifactType
 from hanalpha.ops.artifacts import write_immutable_json
+from hanalpha.ops.external_cost import (
+    ExternalAction,
+    ExternalProvider,
+    external_cost_receipt,
+)
 from hanalpha.ops.secrets import LocalSecret, MacOSKeychainSecretProvider
 from hanalpha.simulation.events import canonical_hash
 
@@ -36,8 +41,26 @@ try:
     from ibapi.order import Order
     from ibapi.order_cancel import OrderCancel
     from ibapi.wrapper import EWrapper
-except ImportError as exc:  # pragma: no cover - environment preflight
-    raise SystemExit("official IBKR ibapi is not installed") from exc
+
+    IBAPI_AVAILABLE = True
+except ImportError:  # pragma: no cover - exercised by clean Linux CI
+    IBAPI_AVAILABLE = False
+
+    class EWrapper:  # type: ignore[no-redef]
+        pass
+
+    class EClient:  # type: ignore[no-redef]
+        def __init__(self, _wrapper: Any) -> None:
+            pass
+
+    class Contract:  # type: ignore[no-redef]
+        pass
+
+    class Order:  # type: ignore[no-redef]
+        pass
+
+    class OrderCancel:  # type: ignore[no-redef]
+        pass
 
 
 PAPER_PORTS = frozenset({4002, 7497})
@@ -60,6 +83,7 @@ SAFE_FAILURE_CODES = {
     "fixture lifecycle requires a zero contract baseline": "ZERO_BASELINE_REQUIRED",
 }
 INFORMATIONAL_IBKR_CODES = {1102, 2104, 2106, 2158}
+FEED_SCOPES = {"NON_CONSOLIDATED", "CONSOLIDATED_NBBO", "UNKNOWN"}
 
 
 class FixtureAction(StrEnum):
@@ -87,6 +111,8 @@ class FixtureClient(EWrapper, EClient):  # type: ignore[misc]
         self.quote_update = threading.Event()
         self.market_data_type: int | None = None
         self.ticks: dict[str, Decimal] = {}
+        self.bbo_exchange: str | None = None
+        self.snapshot_permissions: int | None = None
 
     def nextValidId(self, orderId: int) -> None:
         self.next_order_id = orderId
@@ -138,6 +164,12 @@ class FixtureClient(EWrapper, EClient):  # type: ignore[misc]
             if {"bid", "ask", "last"} <= self.ticks.keys():
                 self.quote_update.set()
 
+    def tickReqParams(
+        self, _tickerId: int, _minTick: float, bboExchange: str, snapshotPermissions: int
+    ) -> None:
+        self.bbo_exchange = bboExchange or None
+        self.snapshot_permissions = int(snapshotPermissions)
+
     def error(self, reqId: int, *args: Any) -> None:
         if len(args) >= 3 and isinstance(args[0], int) and isinstance(args[1], int):
             code = int(args[1])
@@ -157,6 +189,11 @@ class FixtureClient(EWrapper, EClient):  # type: ignore[misc]
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _require_ibapi() -> None:
+    if not IBAPI_AVAILABLE:
+        raise RuntimeError("official IBKR ibapi is not installed")
 
 
 def _market_phase_from_liquid_hours(details: Any, observed_at: datetime) -> str:
@@ -188,6 +225,9 @@ def _quote_capsule_body(
     ticks: dict[str, Decimal],
     market_data_type: int | None,
     observed_at: datetime,
+    feed_scope: str = "UNKNOWN",
+    bbo_exchange: str | None = None,
+    snapshot_permissions: int | None = None,
 ) -> dict[str, Any]:
     contract = details.contract
     con_id = int(getattr(contract, "conId", 0))
@@ -205,6 +245,8 @@ def _quote_capsule_body(
         raise ValueError("contract identity is not an exact SMART USD stock")
     if market_data_type != 1:
         raise ValueError("fixture requires real-time market data")
+    if feed_scope not in FEED_SCOPES:
+        raise ValueError("unsupported feed scope")
     if not {"bid", "ask", "last"} <= ticks.keys():
         raise ValueError("fixture quote is incomplete")
     bid, ask, last = ticks["bid"], ticks["ask"], ticks["last"]
@@ -228,6 +270,30 @@ def _quote_capsule_body(
             "quote_source": "IBKR_TWS",
             "market_data_type": "REALTIME",
             "market_data_type_code": market_data_type,
+            "feed_scope": feed_scope,
+            "bbo_exchange": bbo_exchange,
+            "snapshot_permissions": snapshot_permissions,
+            "fit_for_purpose": {
+                "CONNECTIVITY_ONLY": "PASS",
+                "PAPER_FIXTURE": (
+                    "PASS" if feed_scope != "UNKNOWN" else "BLOCKED_FEED_SCOPE_UNKNOWN"
+                ),
+                "SLIPPAGE_CALIBRATION": (
+                    "PASS"
+                    if feed_scope == "CONSOLIDATED_NBBO"
+                    else "BLOCKED_CONSOLIDATED_NBBO_REQUIRED"
+                ),
+                "CANARY_PRICE_PROTECTION": (
+                    "PASS"
+                    if feed_scope == "CONSOLIDATED_NBBO"
+                    else "BLOCKED_CONSOLIDATED_NBBO_REQUIRED"
+                ),
+                "LIVE_PROPOSAL": (
+                    "PASS"
+                    if feed_scope == "CONSOLIDATED_NBBO"
+                    else "BLOCKED_CONSOLIDATED_NBBO_REQUIRED"
+                ),
+            },
             "observed_at": observed_at,
             "expires_at": expires_at,
             "market_phase": market_phase,
@@ -248,6 +314,7 @@ def _quote_capsule_body(
 
 
 def capture_quote(args: argparse.Namespace) -> int:
+    _require_ibapi()
     config, secrets = load_config()
     if config.execution.broker_write_enabled or config.execution.auto_submit_paper:
         raise ValueError("production execution configuration must remain disabled")
@@ -255,6 +322,27 @@ def capture_quote(args: argparse.Namespace) -> int:
         raise ValueError("quote capture requires reserved Paper fixture transport")
     if not args.attest_paper:
         raise ValueError("explicit --attest-paper is required")
+    cost = external_cost_receipt(
+        provider=ExternalProvider.IBKR,
+        action=ExternalAction.STREAMING_QUOTE,
+        request_count=1,
+        max_new_cost=Decimal(str(args.max_new_cost)),
+        existing_entitlement=bool(args.existing_entitlement_attested),
+        current_plan="EXISTING_MARKET_DATA_ENTITLEMENT",
+    )
+    cost_path = args.cost_output / f"{cost['artifact_id']}.json"
+    write_immutable_json(cost_path, cost)
+    cost_registry = ArtifactRegistry(args.registry)
+    try:
+        cost_registry.register(
+            cost_path,
+            artifact_type=ArtifactType.EXTERNAL_COST_RECEIPT,
+            status="VERIFIED" if cost["decision"] == "ALLOW" else "REJECTED",
+        )
+    finally:
+        cost_registry.close()
+    if cost["decision"] != "ALLOW":
+        raise PermissionError("external quote cost is not authorized")
     account = MacOSKeychainSecretProvider().get(LocalSecret.IBKR_ACCOUNT)
     if not account:
         raise ValueError("Paper account is missing from macOS Keychain")
@@ -295,6 +383,9 @@ def capture_quote(args: argparse.Namespace) -> int:
             ticks=app.ticks,
             market_data_type=app.market_data_type,
             observed_at=observed_at,
+            feed_scope=args.feed_scope,
+            bbo_exchange=app.bbo_exchange,
+            snapshot_permissions=app.snapshot_permissions,
         )
         app.cancelMktData(request_id + 1)
     finally:
@@ -333,6 +424,8 @@ def _load_quote_capsule(path: Path) -> dict[str, Any]:
         or document.get("market_phase") != "REGULAR"
     ):
         raise ValueError("quote capsule is not eligible for a filling fixture")
+    if document.get("fit_for_purpose", {}).get("PAPER_FIXTURE") != "PASS":
+        raise ValueError("quote capsule is not fit for a Paper fixture")
     if datetime.fromisoformat(str(document["expires_at"])) < _utc_now():
         raise ValueError("quote capsule is stale")
     return document
@@ -478,9 +571,9 @@ def _load_permit(path: Path) -> dict[str, Any]:
     return permit
 
 
-def _verify_permit_quote_binding(permit: dict[str, Any], quote_root: Path) -> None:
+def _verify_permit_quote_binding(permit: dict[str, Any], quote_root: Path) -> dict[str, Any] | None:
     if not permit.get("quote_capsule_id"):
-        return
+        return None
     quote_id = str(permit["quote_capsule_id"])
     quote = _load_quote_capsule(quote_root / f"{quote_id}.quote.json")
     for field in (
@@ -493,6 +586,7 @@ def _verify_permit_quote_binding(permit: dict[str, Any], quote_root: Path) -> No
     ):
         if permit.get(field) != quote.get(field):
             raise PermissionError(f"permit quote binding mismatch: {field}")
+    return quote
 
 
 def _consume_permit_once(ledger: Path, permit_id: str) -> None:
@@ -551,7 +645,10 @@ def _initialize_lifecycle_ledger(path: Path) -> sqlite3.Connection:
         "CREATE TABLE IF NOT EXISTS fixture_lifecycles ("
         "lifecycle_id TEXT PRIMARY KEY, quote_capsule_id TEXT NOT NULL, "
         "account_identity_hash TEXT NOT NULL, con_id INTEGER NOT NULL, symbol TEXT NOT NULL, "
-        "baseline_quantity TEXT NOT NULL, created_at TEXT NOT NULL, state TEXT NOT NULL)"
+        "security_type TEXT NOT NULL DEFAULT 'STK', currency TEXT NOT NULL DEFAULT 'USD', "
+        "exchange TEXT NOT NULL DEFAULT 'SMART', baseline_quantity TEXT NOT NULL, "
+        "max_quantity INTEGER NOT NULL DEFAULT 1, max_notional TEXT NOT NULL DEFAULT '1000', "
+        "created_at TEXT NOT NULL, state TEXT NOT NULL)"
     )
     connection.execute(
         "CREATE TABLE IF NOT EXISTS fixture_lifecycle_actions ("
@@ -559,10 +656,34 @@ def _initialize_lifecycle_ledger(path: Path) -> sqlite3.Connection:
         "decision TEXT NOT NULL, observed_at TEXT NOT NULL, "
         "FOREIGN KEY(lifecycle_id) REFERENCES fixture_lifecycles(lifecycle_id))"
     )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS fixture_lifecycle_quotes ("
+        "lifecycle_id TEXT NOT NULL, action TEXT NOT NULL, permit_id TEXT NOT NULL UNIQUE, "
+        "quote_capsule_id TEXT UNIQUE, observed_at TEXT, expires_at TEXT, decision TEXT NOT NULL, "
+        "FOREIGN KEY(lifecycle_id) REFERENCES fixture_lifecycles(lifecycle_id))"
+    )
+    lifecycle_columns = {
+        str(row[1])
+        for row in connection.execute("PRAGMA table_info(fixture_lifecycles)").fetchall()
+    }
+    lifecycle_migrations = {
+        "security_type": "TEXT NOT NULL DEFAULT 'STK'",
+        "currency": "TEXT NOT NULL DEFAULT 'USD'",
+        "exchange": "TEXT NOT NULL DEFAULT 'SMART'",
+        "max_quantity": "INTEGER NOT NULL DEFAULT 1",
+        "max_notional": "TEXT NOT NULL DEFAULT '1000'",
+    }
+    for column, declaration in lifecycle_migrations.items():
+        if column not in lifecycle_columns:
+            connection.execute(
+                f"ALTER TABLE fixture_lifecycles ADD COLUMN {column} {declaration}"
+            )
+    connection.commit()
     return connection
 
 
 def start_lifecycle(args: argparse.Namespace) -> int:
+    _require_ibapi()
     config, secrets = load_config()
     if config.execution.broker_write_enabled or config.execution.auto_submit_paper:
         raise ValueError("production execution configuration must remain disabled")
@@ -602,14 +723,23 @@ def start_lifecycle(args: argparse.Namespace) -> int:
     connection = _initialize_lifecycle_ledger(args.ledger)
     try:
         connection.execute(
-            "INSERT INTO fixture_lifecycles VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO fixture_lifecycles ("
+            "lifecycle_id, quote_capsule_id, account_identity_hash, con_id, symbol, "
+            "security_type, currency, exchange, baseline_quantity, max_quantity, "
+            "max_notional, created_at, state"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 lifecycle_id,
                 quote["artifact_id"],
                 quote["account_identity_hash"],
                 int(quote["con_id"]),
                 quote["symbol"],
+                quote["security_type"],
+                quote["currency"],
+                quote["exchange"],
                 str(baseline),
+                MAX_QUANTITY,
+                str(MAX_NOTIONAL),
                 body["created_at"],
                 "STARTED",
             ),
@@ -635,7 +765,8 @@ def _load_lifecycle(path: Path, lifecycle_id: str) -> dict[str, Any]:
     try:
         row = connection.execute(
             "SELECT lifecycle_id, quote_capsule_id, account_identity_hash, con_id, "
-            "symbol, baseline_quantity, created_at, state "
+            "symbol, security_type, currency, exchange, baseline_quantity, "
+            "max_quantity, max_notional, created_at, state "
             "FROM fixture_lifecycles WHERE lifecycle_id=?",
             (lifecycle_id,),
         ).fetchone()
@@ -649,7 +780,12 @@ def _load_lifecycle(path: Path, lifecycle_id: str) -> dict[str, Any]:
         "account_identity_hash",
         "con_id",
         "symbol",
+        "security_type",
+        "currency",
+        "exchange",
         "baseline_quantity",
+        "max_quantity",
+        "max_notional",
         "created_at",
         "state",
     )
@@ -680,6 +816,10 @@ def _record_lifecycle_action(
             ),
         )
         connection.execute(
+            "UPDATE fixture_lifecycle_quotes SET decision=? WHERE lifecycle_id=? AND permit_id=?",
+            (receipt["decision"], lifecycle_id, permit["artifact_id"]),
+        )
+        connection.execute(
             "UPDATE fixture_lifecycles SET state=? WHERE lifecycle_id=?",
             ("CLEANUP_REQUIRED", lifecycle_id),
         )
@@ -701,12 +841,67 @@ def _validate_lifecycle_action(
             raise PermissionError(f"permit and lifecycle {field} mismatch")
     if permit.get("con_id") is not None and int(permit["con_id"]) != lifecycle["con_id"]:
         raise PermissionError("permit and lifecycle contract mismatch")
-    if (
-        permit.get("quote_capsule_id") is not None
-        and permit["quote_capsule_id"] != lifecycle["quote_capsule_id"]
+    for field in ("security_type", "currency", "exchange"):
+        if permit.get(field) != lifecycle[field]:
+            raise PermissionError(f"permit and lifecycle {field} mismatch")
+    if int(permit["quantity"]) > int(lifecycle["max_quantity"]):
+        raise PermissionError("permit exceeds lifecycle quantity limit")
+    if Decimal(str(permit["limit_price"])) * int(permit["quantity"]) > Decimal(
+        str(lifecycle["max_notional"])
     ):
-        raise PermissionError("permit and lifecycle quote mismatch")
+        raise PermissionError("permit exceeds lifecycle notional limit")
     return lifecycle
+
+
+def _reserve_lifecycle_action(
+    path: Path,
+    lifecycle_id: str,
+    permit: dict[str, Any],
+    quote: dict[str, Any] | None,
+) -> None:
+    _validate_lifecycle_action(path, lifecycle_id, permit)
+    connection = _initialize_lifecycle_ledger(path)
+    try:
+        connection.execute(
+            "INSERT INTO fixture_lifecycle_quotes VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                lifecycle_id,
+                permit["action"],
+                permit["artifact_id"],
+                quote["artifact_id"] if quote is not None else None,
+                quote["observed_at"] if quote is not None else None,
+                quote["expires_at"] if quote is not None else None,
+                "AUTHORIZED_NOT_YET_SENT",
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _lifecycle_action_links(path: Path, lifecycle_id: str) -> list[dict[str, Any]]:
+    connection = _initialize_lifecycle_ledger(path)
+    try:
+        rows = connection.execute(
+            "SELECT q.action, q.permit_id, q.quote_capsule_id, q.observed_at, "
+            "q.expires_at, q.decision, a.receipt_id "
+            "FROM fixture_lifecycle_quotes q LEFT JOIN fixture_lifecycle_actions a "
+            "ON q.lifecycle_id=a.lifecycle_id AND q.permit_id=a.permit_id "
+            "WHERE q.lifecycle_id=? ORDER BY q.rowid",
+            (lifecycle_id,),
+        ).fetchall()
+    finally:
+        connection.close()
+    keys = (
+        "action",
+        "permit_id",
+        "quote_capsule_id",
+        "quote_observed_at",
+        "quote_expires_at",
+        "decision",
+        "receipt_id",
+    )
+    return [dict(zip(keys, row, strict=True)) for row in rows]
 
 
 def _cleanup_is_complete(lifecycle: dict[str, Any], snapshot: dict[str, Any]) -> bool:
@@ -716,6 +911,7 @@ def _cleanup_is_complete(lifecycle: dict[str, Any], snapshot: dict[str, Any]) ->
 
 
 def inspect_or_finish_lifecycle(args: argparse.Namespace, *, finish: bool) -> int:
+    _require_ibapi()
     lifecycle = _load_lifecycle(args.ledger, args.lifecycle_id)
     config, secrets = load_config()
     if config.execution.broker_write_enabled or config.execution.auto_submit_paper:
@@ -753,6 +949,7 @@ def inspect_or_finish_lifecycle(args: argparse.Namespace, *, finish: bool) -> in
             "baseline_quantity": str(baseline_quantity),
             "current_quantity": str(current_quantity),
             "outstanding_fixture_orders": snapshot["fixture_orders"],
+            "action_links": _lifecycle_action_links(args.ledger, args.lifecycle_id),
             "observed_at": _utc_now(),
             "decision": "CLEAN" if clean else "CLEANUP_REQUIRED",
             "secrets_redacted": True,
@@ -958,8 +1155,9 @@ def _classify_outcome(
 
 
 def execute_permit(args: argparse.Namespace) -> int:
+    _require_ibapi()
     permit = _load_permit(args.permit)
-    _verify_permit_quote_binding(permit, args.quote_root)
+    quote = _verify_permit_quote_binding(permit, args.quote_root)
     _validate_lifecycle_action(
         args.lifecycle_ledger,
         args.lifecycle_id,
@@ -968,6 +1166,27 @@ def execute_permit(args: argparse.Namespace) -> int:
     config, secrets = load_config()
     if config.execution.broker_write_enabled or config.execution.auto_submit_paper:
         raise ValueError("production execution configuration must remain disabled")
+    cost = external_cost_receipt(
+        provider=ExternalProvider.IBKR,
+        action=ExternalAction.PAPER_FIXTURE,
+        request_count=1,
+        max_new_cost=Decimal(str(args.max_new_cost)),
+        existing_entitlement=True,
+        current_plan="PAPER_ACCOUNT",
+    )
+    cost_path = args.cost_output / f"{cost['artifact_id']}.json"
+    write_immutable_json(cost_path, cost)
+    cost_registry = ArtifactRegistry(args.registry)
+    try:
+        cost_registry.register(
+            cost_path,
+            artifact_type=ArtifactType.EXTERNAL_COST_RECEIPT,
+            status="VERIFIED" if cost["decision"] == "ALLOW" else "REJECTED",
+        )
+    finally:
+        cost_registry.close()
+    if cost["decision"] != "ALLOW":
+        raise PermissionError("external Paper fixture cost is not authorized")
     account = MacOSKeychainSecretProvider().get(LocalSecret.IBKR_ACCOUNT)
     if not account:
         raise ValueError("Paper account is missing from macOS Keychain")
@@ -1006,6 +1225,12 @@ def execute_permit(args: argparse.Namespace) -> int:
     decision = "OUTCOME_UNKNOWN"
     status: str | None = None
     try:
+        _reserve_lifecycle_action(
+            args.lifecycle_ledger,
+            args.lifecycle_id,
+            permit,
+            quote,
+        )
         _consume_permit_once(args.ledger, str(permit["artifact_id"]))
         broker_order_id = _execute_action(app, permit, account)
         app.order_update.wait(5)
@@ -1084,7 +1309,19 @@ def _parser() -> argparse.ArgumentParser:
     quote.add_argument("--port", type=int, required=True)
     quote.add_argument("--client-id", type=int, required=True)
     quote.add_argument("--attest-paper", action="store_true")
+    quote.add_argument(
+        "--feed-scope",
+        choices=sorted(FEED_SCOPES),
+        default="UNKNOWN",
+    )
+    quote.add_argument("--existing-entitlement-attested", action="store_true")
+    quote.add_argument("--max-new-cost", default="0")
     quote.add_argument("--output", type=Path, default=Path(".state/e1/fixture/quotes"))
+    quote.add_argument(
+        "--cost-output",
+        type=Path,
+        default=Path(".state/external-costs"),
+    )
     quote.add_argument(
         "--registry",
         type=Path,
@@ -1125,6 +1362,12 @@ def _parser() -> argparse.ArgumentParser:
         default=Path(".state/e1/fixture/lifecycles.sqlite3"),
     )
     execute.add_argument("--output", type=Path, default=Path(".state/e1/fixture/receipts"))
+    execute.add_argument("--max-new-cost", default="0")
+    execute.add_argument(
+        "--cost-output",
+        type=Path,
+        default=Path(".state/external-costs"),
+    )
     execute.add_argument(
         "--registry",
         type=Path,

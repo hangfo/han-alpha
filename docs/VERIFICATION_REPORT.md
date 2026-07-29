@@ -770,3 +770,55 @@ modifying their evidence. BLOCKED: the first fixture
 write until TWS API Read-Only is explicitly disabled, all genuine
 static/API/manual order Cases, TWS/network/nightly cases, R1 credentials/rights
 and E2/E3. No Broker write was sent in this change and no Alpha claim is made.
+
+## Issue #7 zero-cost and real-evidence hardening - 2026-07-30
+
+VERIFIED locally:
+
+- GitHub commit `51b8c95` exists on `origin/main`; its failed Actions job was a
+  pytest collection error on clean Linux because the separately licensed
+  official `ibapi` dependency was absent. The fixture module now remains
+  importable/testable without that package, while every real API path calls an
+  explicit fail-closed availability gate.
+- Fixture PLACE/MODIFY/CLOSE lifecycle actions require unique fresh Quote
+  Capsules. The ledger binds account, contract, security type, currency,
+  exchange, quantity and notional limits, records Quote/Permit/Receipt lineage,
+  rejects Quote reuse and migrates the previous schema without data loss.
+- Quote evidence declares feed scope, BBO exchange/snapshot permissions and
+  fit-for-purpose. UNKNOWN feed scope cannot authorize a Paper fixture.
+- IBKR streaming quotes, SEC, Massive and FRED actions create immutable
+  `EXTERNAL_COST_RECEIPT` evidence before network/write. Metered regulatory
+  snapshots are forbidden. SEC is bounded to two requests with a 0.5 second
+  delay; plan-unknown Massive and policy-unreviewed FRED fail before network.
+- Probe manifests bind request start, first byte, response completion,
+  normalization, persistence, monotonic duration, server Date and clock skew.
+- macOS Keychain presence was verified for SEC, FRED and Massive without
+  disclosing values. A real bounded SEC two-request probe completed and produced
+  registered transport/audit artifacts.
+- A zero-write SPY streaming-quote retry with an existing-entitlement
+  attestation still returned `REALTIME_MARKET_DATA_ENTITLEMENT_REQUIRED`;
+  therefore no Quote Capsule, Permit, lifecycle or Broker write was created.
+
+Canonical local result on Python 3.12.13:
+
+- `source .venv/bin/activate && ./scripts/preflight.sh`: PASS;
+- `source .venv/bin/activate && ./scripts/verify_all.sh`: PASS;
+- Ruff: PASS;
+- mypy strict: PASS, 117 source files;
+- pytest: 332 passed, 1 skipped;
+- branch-aware coverage: 85.02%, required threshold 85%;
+- package build, CLI doctor, three-cycle synthetic demo and registered 400-bar
+  backtest: PASS;
+- npm audit, frontend lint, typecheck, 2 Vitest tests and production build: PASS.
+
+BLOCKED:
+
+- E1-B remains blocked on an actually delivered real-time SPY streaming Quote,
+  the first bounded lifecycle, API/ALL orders and recovery/nightly Case matrix.
+- SEC payload access does not replace written rights or independent Reviewer
+  receipts. FRED remains policy-blocked. Massive remains blocked until the exact
+  Basic/free or existing fixed plan and entitlement are truthfully attested.
+
+NOT IMPLEMENTED in this scope: production real-data adapters, E2/E3 Paper
+strategy execution, Execution Price Ladder and any autonomous live execution.
+No profitability, NBBO quality or production-readiness claim is made.

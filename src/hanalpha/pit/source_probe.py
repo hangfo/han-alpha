@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import gzip
 import json
+import time
 import zlib
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -40,12 +42,18 @@ async def run_bounded_source_probe(
     maximum = 7 if source is ProbeSource.MASSIVE else 10
     if len(identifiers) > maximum:
         raise ValueError(f"{source.value} probe is bounded to {maximum} identifiers")
+    if source is ProbeSource.FRED_ALFRED:
+        raise SourceProbeError("fred_alfred:POLICY_REVIEW_REQUIRED")
     requests = _requests(source, identifiers, secrets)
     external_client = client is not None
     http = client or httpx.AsyncClient(timeout=30, follow_redirects=False)
     responses: list[dict[str, Any]] = []
     try:
         for index, request in enumerate(requests):
+            if source is ProbeSource.SEC_EDGAR and index:
+                await _bounded_sec_delay()
+            request_started_at = datetime.now(UTC)
+            monotonic_started = time.monotonic_ns()
             try:
                 built_request = http.build_request(
                     "GET",
@@ -54,6 +62,7 @@ async def run_bounded_source_probe(
                     headers=request["headers"],
                 )
                 response = await http.send(built_request, stream=True)
+                first_byte_at = datetime.now(UTC)
                 content_type = response.headers.get("content-type", "")
                 if "json" not in content_type.lower():
                     await response.aclose()
@@ -64,6 +73,7 @@ async def run_bounded_source_probe(
                     else b"".join([chunk async for chunk in response.aiter_raw()])
                 )
                 await response.aclose()
+                response_completed_at = datetime.now(UTC)
                 normalized_body = _decode_transport_body(
                     transport_body,
                     response.headers.get("content-encoding", ""),
@@ -75,6 +85,7 @@ async def run_bounded_source_probe(
                     raise SourceProbeError(f"{source.value}:{request['name']}:NON_OBJECT_RESPONSE")
                 response.raise_for_status()
                 _validate_payload(source, request["name"], payload)
+                normalized_at = datetime.now(UTC)
             except (httpx.HTTPError, json.JSONDecodeError) as exc:
                 raise SourceProbeError(
                     f"{source.value}:{request['name']}:{type(exc).__name__}"
@@ -114,6 +125,17 @@ async def run_bounded_source_probe(
                 if key in response.headers
             }
             write_immutable_json(headers_destination, selected_headers)
+            persisted_at = datetime.now(UTC)
+            server_date = selected_headers.get("date")
+            clock_skew_seconds: float | None = None
+            if server_date:
+                try:
+                    parsed_server_date = parsedate_to_datetime(server_date).astimezone(UTC)
+                    clock_skew_seconds = (
+                        response_completed_at - parsed_server_date
+                    ).total_seconds()
+                except (TypeError, ValueError):
+                    clock_skew_seconds = None
             responses.append(
                 {
                     "name": request["name"],
@@ -132,10 +154,18 @@ async def run_bounded_source_probe(
                     "http_status": response.status_code,
                     "content_type": content_type.split(";", 1)[0],
                     "content_encoding": response.headers.get("content-encoding") or "identity",
-                    "observed_at": at.astimezone(UTC).isoformat(),
-                    "received_at": at.astimezone(UTC).isoformat(),
+                    "observed_at": response_completed_at.isoformat(),
+                    "received_at": response_completed_at.isoformat(),
                     "effective_time_semantics": request["effective_time_semantics"],
-                    "ingested_at": at.astimezone(UTC).isoformat(),
+                    "ingested_at": persisted_at.isoformat(),
+                    "request_started_at": request_started_at.isoformat(),
+                    "first_byte_at": first_byte_at.isoformat(),
+                    "response_completed_at": response_completed_at.isoformat(),
+                    "normalized_at": normalized_at.isoformat(),
+                    "persisted_at": persisted_at.isoformat(),
+                    "server_date": server_date,
+                    "clock_skew_seconds": clock_skew_seconds,
+                    "monotonic_duration_ms": (time.monotonic_ns() - monotonic_started) / 1_000_000,
                 }
             )
     finally:
@@ -162,6 +192,12 @@ async def run_bounded_source_probe(
     manifest_path = output_root / f"{manifest['artifact_id']}.json"
     write_immutable_json(manifest_path, manifest)
     return manifest_path, manifest
+
+
+async def _bounded_sec_delay() -> None:
+    import asyncio
+
+    await asyncio.sleep(0.5)
 
 
 def _requests(

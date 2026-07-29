@@ -1,6 +1,6 @@
 # Broker and real-data onboarding
 
-Updated: 2026-07-29
+Updated: 2026-07-30
 
 ## Current local result
 
@@ -13,11 +13,11 @@ localhost:4002 listening: false
 localhost:7497 listening: true
 IBKR_ACCOUNT stored in macOS Keychain: true
 E1 API empty_account sessions: 5/5
-MASSIVE_API_KEY configured: false
-FRED_API_KEY configured: false
-SEC_USER_AGENT configured: false
+MASSIVE_API_KEY configured: true
+FRED_API_KEY configured: true
+SEC_USER_AGENT configured: true
 TWS API Read-Only disabled for bounded Paper fixture: true
-SPY real-time market-data entitlement: false
+SPY real-time market-data entitlement in current API session: false
 ```
 
 TWS Server Version 225, the single authenticated managed Paper account, account
@@ -28,7 +28,16 @@ still `BLOCKED_EXTERNAL_RIGHTS` before `static_position`: the quote-bound fixtur
 resolves the unique SPY contract but TWS does not provide eligible real-time
 bid/ask/last data. The remaining matrix also requires genuine Paper
 positions/orders and bounded restart, recovery, nightly-reset and client-switch
-events. No vendor request or Broker write was made.
+events. A bounded SEC probe was made on 2026-07-30; FRED and Massive were
+blocked before network, and no Broker write was made.
+
+Credential presence is not source acceptance. Every external action now requires
+an immutable zero-incremental-cost receipt. IBKR regulatory snapshots are
+forbidden; streaming quotes require an attested existing subscription. SEC is
+limited to two proof requests with a 0.5 second inter-request delay. Massive
+requires an explicit `BASIC_FREE` or `EXISTING_FIXED_SUBSCRIPTION` plan plus an
+existing-entitlement attestation. FRED/ALFRED is blocked before network pending
+review of the current API/content terms for software, AI and storage use.
 
 The preferred local secret store is macOS Keychain. Secret values are read from
 stdin by the onboarding CLI, are never placed in command arguments, and are not
@@ -261,6 +270,10 @@ hanalpha r1 run --source massive --dry-run --github-summary
 # --execute is an explicit, bounded real network action. Start with SEC only
 # after storing a descriptive User-Agent and reviewing provider terms.
 hanalpha r1 run --source sec_edgar --execute --github-summary
+
+# Massive is still blocked unless the operator can truthfully select one:
+hanalpha r1 run --source massive --execute --max-new-cost 0 \
+  --massive-plan BASIC_FREE --existing-entitlement-attested --github-summary
 
 hanalpha pit probe-source --source sec_edgar \
   --identifier 320193 \

@@ -1,8 +1,8 @@
 # Active execution plan: complete Han Alpha platform
 
-Status: ACTIVE; E1-A/R1-A complete, E1-B authenticated empty-account slice verified
+Status: ACTIVE; E1-A/R1-A complete, Issue #7 local gates verified; E1-B/R1-B externally blocked
 Owner: Codex
-Last updated: 2026-07-26
+Last updated: 2026-07-30
 
 ## Goal
 
@@ -104,6 +104,14 @@ Record important decisions here with date, alternatives, and consequences. Do no
   and lifecycle cleanup must return to baseline. A real Observer run passed
   33/33 facts with zero drops, while SPY quote capture was blocked on real-time
   market-data entitlement. No Permit or Broker write was created.
+- 2026-07-30: Issue #7 made external cost and lifecycle evidence authoritative.
+  Every writable lifecycle action now rotates to a unique fresh Quote, binds
+  contract/risk limits and migrates old ledgers. Quote feed scope is explicit;
+  unknown scope cannot authorize a fixture. Regulatory snapshots and policy/
+  plan-unknown provider calls fail before network. SEC completed a bounded
+  two-request real probe with stage timings; FRED and Massive remained
+  pre-network blocked. The current TWS API session still rejected SPY real-time
+  streaming data, so no Permit or Broker write was created.
 
 ## Verification log
 
@@ -145,3 +153,5 @@ Issue #4 decisions and the beginner-safe real setup sequence are recorded in
 Issue #5/#6 evidence-matrix and pre-write decisions are recorded in
 `../../v2-plan/22_ISSUE5_REVIEW_AND_E1_MATRIX_HARDENING_ZH.md` and
 `../../v2-plan/23_ISSUE6_PREWRITE_REVIEW_AND_REALITY_GATE_ZH.md`.
+Issue #7 decisions, current real evidence and the post-gate sequence are recorded
+in `../../v2-plan/24_ISSUE7_REVIEW_ZERO_COST_AND_REALITY_GATE_ZH.md`.

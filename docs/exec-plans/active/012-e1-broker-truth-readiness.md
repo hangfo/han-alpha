@@ -1,6 +1,6 @@
 # E1 execution plan: Broker Truth Readiness
 
-Status: E1-A COMPLETE; ISSUE #6 PRE-WRITE HARDENING VERIFIED; REAL MATRIX BLOCKED
+Status: E1-A COMPLETE; ISSUE #7 PRE-WRITE/COST HARDENING VERIFIED; REAL MATRIX BLOCKED
 Owner: Codex and operator
 Started: 2026-07-26
 
@@ -93,6 +93,14 @@ capability.
   Client 419: 33 accepted/written facts, zero drops, complete Scope and no
   position/order. SPY contract qualification succeeded, but TWS reported no
   eligible real-time market data; no Quote Capsule, Permit or write was created.
+- Issue #7 requires a separate, unique fresh Quote for every PLACE/MODIFY/CLOSE
+  action, records feed scope and fit-for-purpose, and migrates legacy lifecycle
+  ledgers without losing their baselines. An immutable zero-cost receipt is
+  required before quote capture; regulatory snapshots are never a fallback.
+- A 2026-07-30 zero-write SPY retry, with operator entitlement attestation,
+  still returned `REALTIME_MARKET_DATA_ENTITLEMENT_REQUIRED`. This current
+  Broker fact overrides the reported subscription state; no lifecycle was
+  started and no write was attempted.
 
 ## External sequence
 

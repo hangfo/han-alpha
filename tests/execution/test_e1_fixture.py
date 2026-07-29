@@ -35,6 +35,24 @@ def _args(**overrides):
     return Namespace(**values)
 
 
+def _lifecycle_row(lifecycle_id: str, state: str = "STARTED"):
+    return (
+        lifecycle_id,
+        "q" * 64,
+        "a" * 64,
+        11,
+        "SPY",
+        "STK",
+        "USD",
+        "SMART",
+        "0",
+        1,
+        "1000",
+        "now",
+        state,
+    )
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     (
@@ -101,6 +119,7 @@ def test_quote_capsule_requires_exact_realtime_regular_tight_market() -> None:
     )
     assert capsule["decision"] == "PASS"
     assert capsule["con_id"] == 756733
+    assert capsule["fit_for_purpose"]["PAPER_FIXTURE"] == "BLOCKED_FEED_SCOPE_UNKNOWN"
     with pytest.raises(ValueError, match="real-time"):
         fixture._quote_capsule_body(
             account_identity_hash="a" * 64,
@@ -137,6 +156,7 @@ def test_stale_quote_capsule_and_off_collar_permit_are_rejected(
         ticks={"bid": Decimal("630.00"), "ask": Decimal("630.01"), "last": Decimal("630.00")},
         market_data_type=1,
         observed_at=observed,
+        feed_scope="NON_CONSOLIDATED",
     )
     capsule = {"artifact_id": fixture.canonical_hash(body), **body}
     path = tmp_path / f"{capsule['artifact_id']}.quote.json"
@@ -232,8 +252,8 @@ def test_lifecycle_records_unknown_write_and_cleanup_requires_baseline(tmp_path)
     connection = fixture._initialize_lifecycle_ledger(ledger)
     try:
         connection.execute(
-            "INSERT INTO fixture_lifecycles VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ("lifecycle", "q" * 64, "a" * 64, 11, "SPY", "0", "now", "STARTED"),
+            "INSERT INTO fixture_lifecycles VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            _lifecycle_row("lifecycle"),
         )
         connection.commit()
     finally:
@@ -242,6 +262,12 @@ def test_lifecycle_records_unknown_write_and_cleanup_requires_baseline(tmp_path)
         "artifact_id": "p" * 64,
         "account_identity_hash": "a" * 64,
         "con_id": 11,
+        "symbol": "SPY",
+        "security_type": "STK",
+        "currency": "USD",
+        "exchange": "SMART",
+        "quantity": 1,
+        "limit_price": "630",
     }
     receipt = {
         "artifact_id": "r" * 64,
@@ -270,12 +296,12 @@ def test_lifecycle_is_validated_before_every_fixture_write(tmp_path) -> None:
     connection = fixture._initialize_lifecycle_ledger(ledger)
     try:
         connection.execute(
-            "INSERT INTO fixture_lifecycles VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ("lifecycle", "q" * 64, "a" * 64, 11, "SPY", "0", "now", "STARTED"),
+            "INSERT INTO fixture_lifecycles VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            _lifecycle_row("lifecycle"),
         )
         connection.execute(
-            "INSERT INTO fixture_lifecycles VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ("closed", "q" * 64, "a" * 64, 11, "SPY", "0", "now", "CLEAN"),
+            "INSERT INTO fixture_lifecycles VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            _lifecycle_row("closed", "CLEAN"),
         )
         connection.commit()
     finally:
@@ -285,6 +311,11 @@ def test_lifecycle_is_validated_before_every_fixture_write(tmp_path) -> None:
         "symbol": "SPY",
         "con_id": 11,
         "quote_capsule_id": "q" * 64,
+        "security_type": "STK",
+        "currency": "USD",
+        "exchange": "SMART",
+        "quantity": 1,
+        "limit_price": "630",
     }
     assert fixture._validate_lifecycle_action(ledger, "lifecycle", permit)["state"] == "STARTED"
     with pytest.raises(PermissionError, match="contract mismatch"):
@@ -295,3 +326,82 @@ def test_lifecycle_is_validated_before_every_fixture_write(tmp_path) -> None:
         )
     with pytest.raises(PermissionError, match="already clean"):
         fixture._validate_lifecycle_action(ledger, "closed", permit)
+
+
+def test_lifecycle_allows_fresh_quote_rotation_but_not_quote_reuse(tmp_path) -> None:
+    ledger = tmp_path / "lifecycle.sqlite3"
+    connection = fixture._initialize_lifecycle_ledger(ledger)
+    try:
+        connection.execute(
+            "INSERT INTO fixture_lifecycles VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            _lifecycle_row("lifecycle"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    base = {
+        "account_identity_hash": "a" * 64,
+        "symbol": "SPY",
+        "con_id": 11,
+        "security_type": "STK",
+        "currency": "USD",
+        "exchange": "SMART",
+        "quantity": 1,
+        "limit_price": "630",
+        "action": "PLACE",
+    }
+    q1 = {
+        "artifact_id": "1" * 64,
+        "observed_at": "2026-07-29T15:00:00+00:00",
+        "expires_at": "2026-07-29T15:00:15+00:00",
+    }
+    q2 = {
+        "artifact_id": "2" * 64,
+        "observed_at": "2026-07-29T15:10:00+00:00",
+        "expires_at": "2026-07-29T15:10:15+00:00",
+    }
+    fixture._reserve_lifecycle_action(ledger, "lifecycle", {**base, "artifact_id": "p" * 64}, q1)
+    fixture._reserve_lifecycle_action(
+        ledger,
+        "lifecycle",
+        {**base, "artifact_id": "c" * 64, "action": "CLOSE_POSITION"},
+        q2,
+    )
+    assert len(fixture._lifecycle_action_links(ledger, "lifecycle")) == 2
+    with pytest.raises(fixture.sqlite3.IntegrityError):
+        fixture._reserve_lifecycle_action(
+            ledger, "lifecycle", {**base, "artifact_id": "x" * 64}, q1
+        )
+
+
+def test_lifecycle_ledger_migrates_the_previous_schema_without_data_loss(tmp_path) -> None:
+    ledger = tmp_path / "legacy.sqlite3"
+    connection = fixture.sqlite3.connect(ledger)
+    connection.execute(
+        "CREATE TABLE fixture_lifecycles ("
+        "lifecycle_id TEXT PRIMARY KEY, quote_capsule_id TEXT NOT NULL, "
+        "account_identity_hash TEXT NOT NULL, con_id INTEGER NOT NULL, symbol TEXT NOT NULL, "
+        "baseline_quantity TEXT NOT NULL, created_at TEXT NOT NULL, state TEXT NOT NULL)"
+    )
+    connection.execute(
+        "INSERT INTO fixture_lifecycles VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ("legacy", "q" * 64, "a" * 64, 11, "SPY", "0", "now", "STARTED"),
+    )
+    connection.commit()
+    connection.close()
+
+    migrated = fixture._initialize_lifecycle_ledger(ledger)
+    migrated.close()
+    lifecycle = fixture._load_lifecycle(ledger, "legacy")
+    assert lifecycle["symbol"] == "SPY"
+    assert lifecycle["security_type"] == "STK"
+    assert lifecycle["currency"] == "USD"
+    assert lifecycle["exchange"] == "SMART"
+    assert lifecycle["max_quantity"] == 1
+    assert lifecycle["max_notional"] == "1000"
+
+
+def test_fixture_import_remains_testable_without_official_ibapi(monkeypatch) -> None:
+    monkeypatch.setattr(fixture, "IBAPI_AVAILABLE", False)
+    with pytest.raises(RuntimeError, match="official IBKR ibapi"):
+        fixture._require_ibapi()

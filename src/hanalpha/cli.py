@@ -639,7 +639,7 @@ def pit_vendor_preflight(
 ) -> None:
     """Report configured vendor access without exposing any credential value."""
 
-    _, secrets = load_config()
+    secrets, _ = _local_settings()
     artifact = vendor_access_preflight(secrets, at=datetime.now(UTC))
     destination = output / f"{artifact['artifact_id']}.json"
     persist_qualification(destination, artifact)
@@ -1248,6 +1248,9 @@ def r1_run(
         ".state/evidence-artifacts.sqlite3"
     ),
     execute: Annotated[bool, typer.Option("--execute/--dry-run")] = False,
+    max_new_cost: Annotated[str, typer.Option("--max-new-cost")] = "0",
+    massive_plan: Annotated[str | None, typer.Option("--massive-plan")] = None,
+    existing_entitlement: Annotated[bool, typer.Option("--existing-entitlement-attested")] = False,
     github_summary_output: Annotated[
         bool, typer.Option("--github-summary/--no-github-summary")
     ] = False,
@@ -1266,6 +1269,9 @@ def r1_run(
                 secrets=secrets,
                 at=datetime.now(UTC),
                 execute=execute,
+                max_new_cost=Decimal(max_new_cost),
+                massive_plan=massive_plan,
+                existing_entitlement=existing_entitlement,
             )
         finally:
             registry.close()

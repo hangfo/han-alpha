@@ -1,6 +1,6 @@
 # Known limitations
 
-Updated: 2026-07-29 after Issue #6 pre-write hardening.
+Updated: 2026-07-30 after Issue #7 zero-cost and lifecycle hardening.
 
 1. Synthetic data is only for engineering validation. Synthetic returns are not investment evidence.
 2. M1 proves PIT contracts only on repository-owned synthetic fixtures. It does not validate any real vendor's timestamps, symbology, revisions, corporate actions, licensing, retention or outage behavior.
@@ -54,3 +54,16 @@ Updated: 2026-07-29 after Issue #6 pre-write hardening.
     filling fixture, so no Quote Capsule, Permit, lifecycle or first PLACE exists.
 29. Fixture lifecycle recovery is application-auditable but not an OS-isolated
     trading daemon. Host compromise remains outside the Python safety boundary.
+30. All three R1 credentials are present in macOS Keychain. A bounded two-request
+    SEC probe succeeded at the HTTP/evidence layer, but written rights and
+    independent review remain missing. FRED is blocked before network under the
+    current terms review; Massive is blocked before network until the exact
+    Basic/free or existing fixed plan and entitlement are attested.
+31. The operator reports that US Paper real-time data is active, but the current
+    TWS API session still rejects the bounded SPY streaming quote. A subscription
+    report is not substituted for the Broker callback; relogin/data-sharing/API
+    acknowledgement must be verified before a fixture Permit can exist.
+32. `51b8c95` was committed and pushed successfully. Its GitHub red check was a
+    clean-CI collection failure because the separately licensed official `ibapi`
+    package is intentionally absent there. Fixture imports are now optional for
+    test collection while every real API operation still fails closed without it.

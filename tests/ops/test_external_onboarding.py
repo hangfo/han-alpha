@@ -665,6 +665,51 @@ async def test_r1_runner_fails_closed_before_network_and_before_rights(tmp_path)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source", "secrets", "expected_reason"),
+    [
+        (
+            ProbeSource.FRED_ALFRED,
+            SecretSettings(_env_file=None, fred_api_key="configured"),
+            "FRED_POLICY_REVIEW_REQUIRED",
+        ),
+        (
+            ProbeSource.MASSIVE,
+            SecretSettings(_env_file=None, massive_api_key="configured"),
+            "INCREMENTAL_COST_UNKNOWN",
+        ),
+    ],
+)
+async def test_r1_runner_registers_cost_block_before_provider_network(
+    tmp_path, monkeypatch, source, secrets, expected_reason
+) -> None:
+    called = False
+
+    async def fail_if_called(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("provider network must remain unreachable")
+
+    monkeypatch.setattr(external_runners_module, "run_bounded_source_probe", fail_if_called)
+    registry = ArtifactRegistry(tmp_path / "registry.sqlite3")
+    try:
+        report = await run_r1_source(
+            source,
+            output_root=tmp_path / "r1",
+            registry=registry,
+            secrets=secrets,
+            at=NOW,
+            execute=True,
+        )
+    finally:
+        registry.close()
+    assert not called
+    assert report["status"] == OperatorStatus.BLOCKED_EXTERNAL_RIGHTS
+    assert report["reason"] == expected_reason
+    assert len(report["artifact_ids"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_r1_runner_executes_bounded_bundle_but_still_blocks_external_rights(
     tmp_path, monkeypatch
 ) -> None:
@@ -721,7 +766,7 @@ async def test_r1_runner_executes_bounded_bundle_but_still_blocks_external_right
     finally:
         registry.close()
     assert report["status"] == OperatorStatus.BLOCKED_EXTERNAL_RIGHTS
-    assert len(report["artifact_ids"]) == 2
+    assert len(report["artifact_ids"]) == 3
     assert report["reviewer_bundle_id"]
 
 

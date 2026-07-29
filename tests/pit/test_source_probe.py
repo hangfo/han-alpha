@@ -13,7 +13,13 @@ from hanalpha.config import SecretSettings
 from hanalpha.ops.artifact_registry import ArtifactRegistry, ArtifactType
 from hanalpha.ops.artifacts import sha256_file, write_immutable_json
 from hanalpha.pit.source_audit import audit_probe_manifest
-from hanalpha.pit.source_probe import ProbeSource, SourceProbeError, run_bounded_source_probe
+from hanalpha.pit.source_probe import (
+    ProbeSource,
+    SourceProbeError,
+    _requests,
+    _validate_payload,
+    run_bounded_source_probe,
+)
 
 NOW = datetime(2024, 1, 1, tzinfo=UTC)
 
@@ -60,6 +66,9 @@ async def test_sec_probe_is_bounded_redacted_and_registry_resolvable(tmp_path) -
     assert manifest["artifact_type"] == ArtifactType.RAW_SAMPLE_MANIFEST
     assert manifest["responses"][0]["effective_time_semantics"].startswith("EDGAR")
     response = manifest["responses"][0]
+    assert response["request_started_at"] <= response["response_completed_at"]
+    assert response["response_completed_at"] <= response["persisted_at"]
+    assert response["monotonic_duration_ms"] >= 0
     assert response["transport_sha256"] != response["normalized_sha256"]
     assert (path.parent / response["transport_file"]).read_bytes().startswith(b"{")
     assert json.loads((path.parent / response["headers_file"]).read_text()) == {
@@ -96,44 +105,53 @@ async def test_sec_probe_is_bounded_redacted_and_registry_resolvable(tmp_path) -
 
 
 @pytest.mark.asyncio
-async def test_fred_probe_preserves_vintages_without_serializing_key(tmp_path) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        payload = (
-            {"vintage_dates": ["2023-01-01", "2024-01-01"]}
-            if request.url.path.endswith("vintagedates")
-            else {
-                "observations": [
-                    {
-                        "date": "2023-01-01",
-                        "realtime_start": "2023-01-01",
-                        "realtime_end": "2023-01-31",
-                        "value": "1.0",
-                    }
-                ]
-            }
-        )
-        assert request.url.params["api_key"] == "fred-secret"
-        return httpx.Response(200, headers={"content-type": "application/json"}, json=payload)
+async def test_fred_probe_is_policy_blocked_before_network(tmp_path) -> None:
+    called = False
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(200, json={})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        path, manifest = await run_bounded_source_probe(
-            ProbeSource.FRED_ALFRED,
-            ("CPIAUCSL",),
-            output_root=tmp_path / "fred",
-            secrets=SecretSettings(fred_api_key="fred-secret"),
-            at=NOW,
-            client=client,
-        )
-    assert manifest["request_count"] == 2
-    assert "fred-secret" not in json.dumps(manifest)
-    assert {item["name"] for item in manifest["responses"]} == {
+        with pytest.raises(SourceProbeError, match="POLICY_REVIEW_REQUIRED"):
+            await run_bounded_source_probe(
+                ProbeSource.FRED_ALFRED,
+                ("CPIAUCSL",),
+                output_root=tmp_path / "fred",
+                secrets=SecretSettings(fred_api_key="fred-secret"),
+                at=NOW,
+                client=client,
+            )
+    assert not called
+
+
+def test_fred_request_template_remains_bounded_while_runtime_policy_is_blocked() -> None:
+    requests = _requests(
+        ProbeSource.FRED_ALFRED,
+        ("CPIAUCSL",),
+        SecretSettings(fred_api_key="configured"),
+    )
+    assert [request["name"] for request in requests] == [
         "observations-CPIAUCSL",
         "vintages-CPIAUCSL",
-    }
-    audits = audit_probe_manifest(path, output_root=tmp_path / "fred-audits")
-    decisions = {artifact_type: document["decision"] for _, artifact_type, document in audits}
-    assert decisions[ArtifactType.REVISION_AUDIT] == "PASS"
-    assert decisions[ArtifactType.TIMESTAMP_AUDIT] == "BLOCKED"
+    ]
+    assert requests[0]["params"]["limit"] == 5000
+    assert requests[1]["params"]["limit"] == 1000
+    _validate_payload(
+        ProbeSource.FRED_ALFRED,
+        "observations-CPIAUCSL",
+        {"observations": []},
+    )
+    _validate_payload(
+        ProbeSource.FRED_ALFRED,
+        "vintages-CPIAUCSL",
+        {"vintage_dates": []},
+    )
+    with pytest.raises(ValueError, match="FRED_API_KEY"):
+        _requests(ProbeSource.FRED_ALFRED, ("CPIAUCSL",), SecretSettings())
+    with pytest.raises(SourceProbeError, match="OBSERVATIONS_MISSING"):
+        _validate_payload(ProbeSource.FRED_ALFRED, "observations-CPIAUCSL", {})
 
 
 @pytest.mark.asyncio
@@ -162,7 +180,7 @@ async def test_probe_rejects_missing_identity_credentials_and_unbounded_scope(tm
             secrets=SecretSettings(sec_user_agent="Han Alpha ops@hanalpha.test"),
             at=NOW,
         )
-    with pytest.raises(ValueError, match="FRED_API_KEY"):
+    with pytest.raises(SourceProbeError, match="POLICY_REVIEW_REQUIRED"):
         await run_bounded_source_probe(
             ProbeSource.FRED_ALFRED,
             ("CPIAUCSL",),

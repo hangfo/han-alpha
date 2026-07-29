@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,11 @@ from hanalpha.execution.e1_scenarios import (
 )
 from hanalpha.ops.artifact_registry import ArtifactRegistry, ArtifactType
 from hanalpha.ops.artifacts import write_immutable_json
+from hanalpha.ops.external_cost import (
+    ExternalAction,
+    ExternalProvider,
+    external_cost_receipt,
+)
 from hanalpha.ops.onboarding import OperatorStatus
 from hanalpha.pit.source_audit import audit_probe_manifest
 from hanalpha.pit.source_probe import ProbeSource, run_bounded_source_probe
@@ -109,9 +115,7 @@ def e1_progress(output_root: Path, scope: E1Scope) -> dict[str, Any]:
     available_receipt_ids: set[str] = set()
     for receipt_path in (output_root / "receipts").glob("*.json"):
         try:
-            receipt = E1EventReceipt.model_validate_json(
-                receipt_path.read_text(encoding="utf-8")
-            )
+            receipt = E1EventReceipt.model_validate_json(receipt_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         available_receipt_ids.add(receipt.artifact_id)
@@ -160,8 +164,7 @@ def e1_progress(output_root: Path, scope: E1Scope) -> dict[str, Any]:
         "invalid_session_count": invalid_sessions,
         "invalid_case_count": invalid_cases,
         "case_allocation_rejections": {
-            case_id: list(reasons)
-            for case_id, reasons in sorted(allocation_rejections.items())
+            case_id: list(reasons) for case_id, reasons in sorted(allocation_rejections.items())
         },
         "next_scenario": next_scenario,
         "next_action_kind": next_action_kind,
@@ -183,6 +186,9 @@ async def run_r1_source(
     secrets: SecretSettings,
     at: datetime,
     execute: bool,
+    max_new_cost: Decimal = Decimal("0"),
+    massive_plan: str | None = None,
+    existing_entitlement: bool = False,
 ) -> dict[str, Any]:
     missing_secret = {
         ProbeSource.SEC_EDGAR: not bool(secrets.sec_user_agent),
@@ -205,6 +211,41 @@ async def run_r1_source(
             artifact_ids=(),
             at=at,
         )
+    provider = {
+        ProbeSource.SEC_EDGAR: ExternalProvider.SEC,
+        ProbeSource.FRED_ALFRED: ExternalProvider.FRED,
+        ProbeSource.MASSIVE: ExternalProvider.MASSIVE,
+    }[source]
+    request_count = {
+        ProbeSource.SEC_EDGAR: 2,
+        ProbeSource.FRED_ALFRED: 10,
+        ProbeSource.MASSIVE: 3,
+    }[source]
+    cost = external_cost_receipt(
+        provider=provider,
+        action=ExternalAction.BOUNDED_GET,
+        request_count=request_count,
+        max_new_cost=max_new_cost,
+        existing_entitlement=(existing_entitlement if source is ProbeSource.MASSIVE else True),
+        current_plan=massive_plan if source is ProbeSource.MASSIVE else None,
+        at=at,
+    )
+    cost_path = output_root / source.value / "costs" / f"{cost['artifact_id']}.json"
+    write_immutable_json(cost_path, cost)
+    cost_id = registry.register(
+        cost_path,
+        artifact_type=ArtifactType.EXTERNAL_COST_RECEIPT,
+        status="VERIFIED" if cost["decision"] == "ALLOW" else "REJECTED",
+        at=at,
+    )
+    if cost["decision"] != "ALLOW":
+        return _r1_report(
+            source,
+            status=OperatorStatus.BLOCKED_EXTERNAL_RIGHTS,
+            reason=str(cost["reasons"][0]),
+            artifact_ids=(cost_id,),
+            at=at,
+        )
     source_root = output_root / source.value / at.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
     manifest_path, _ = await run_bounded_source_probe(
         source,
@@ -214,12 +255,13 @@ async def run_r1_source(
         at=at,
     )
     artifact_ids: list[str] = [
+        cost_id,
         registry.register(
             manifest_path,
             artifact_type=ArtifactType.RAW_SAMPLE_MANIFEST,
             status="VERIFIED",
             at=at,
-        )
+        ),
     ]
     for path, artifact_type, document in audit_probe_manifest(
         manifest_path, output_root=source_root / "audits"

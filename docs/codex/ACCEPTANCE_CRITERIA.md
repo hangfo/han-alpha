@@ -121,6 +121,12 @@ Observer raw transport使用线程局部内部守卫，Fixture绑定实时RTH Qu
 Capsule并采用精确Outcome和可恢复Cleanup Receipt。真实Observer 33/33零丢失
 通过；SPY实时行情权限缺失，故没有Quote Capsule、Permit或PLACE，E1-B仍不勾选。
 
+Issue #7 已修复完整Lifecycle复用首张15秒Quote的P0问题：每个可写动作都要求
+独立新Quote并记录用途、feed scope和Permit绑定；所有外部调用增加零增量成本
+回执，Regulatory Snapshot被禁止。SEC真实有界探测已成功，但独立权利Review
+未完成；FRED与Massive分别在政策和套餐门前阻断。当前TWS API仍未返回SPY实时
+流，因此没有Permit或Broker写，E1-B/R1-B仍不勾选。
+
 ## 8. 工程质量
 
 - [x] Ruff通过。
